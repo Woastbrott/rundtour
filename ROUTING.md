@@ -284,23 +284,16 @@ weil aus der Zielzeit die Zieldistanz abgeleitet wird — gemessen bei Ziel 2 h,
 | sportlich | 43.1 km |
 | profi | 44.9 km |
 
+
 ---
 
-## Export nach komoot
+## Warum es keinen komoot-Export gibt
 
-**Einen echten Direktexport gibt es nicht, und zwar prinzipiell nicht.** komoot hat keine
-offene API. Der offizielle OAuth-Beispielcode im komoot-GitHub sagt dazu: *"To use this demo
-code you need valid oauth2 credentials. You can apply for them here: komoot.de/b2b/connect"* —
-also ein B2B-Partnervertrag. Ohne den ist ein Server-zu-Server-Upload nicht moeglich.
+War angefragt, ist aber nicht baubar: **komoot hat keine offene API.** Der offizielle
+OAuth-Beispielcode im komoot-GitHub sagt dazu *"To use this demo code you need valid oauth2
+credentials. You can apply for them here: komoot.de/b2b/connect"* — also ein
+B2B-Partnervertrag. Ohne den ist ein Server-zu-Server-Upload nicht moeglich.
 
-Umgesetzt sind deshalb die zwei Wege, die ueber die GPX-Datei laufen (`lib/komoot.ts`):
-
-- **Handy:** Web Share API mit der Datei (`navigator.share({ files })`). Das oeffnet den
-  System-Teilen-Dialog, in dem komoot als Ziel auftaucht. Ein Tipp — naeher kommt man ohne
-  Partnerzugang nicht.
-- **Desktop:** GPX herunterladen und `komoot.com/upload` in einem neuen Tab oeffnen. Dort
-  dann "GPS-Datei importieren".
-
-Welcher Weg genommen wurde, gibt `exportToKomoot` zurueck, damit das UI die passende
-Anweisung anzeigt statt einer allgemeinen. Abbruch im Teilen-Dialog ist kein Fehler und
-loest keinen Download aus.
+Ein Umweg ueber die GPX-Datei war kurz eingebaut (Web Share API am Handy, Download plus
+`komoot.com/upload` am Desktop) und auf Wunsch wieder entfernt. Bleibt der GPX-Export, den
+komoot ueber "GPS-Datei importieren" frisst.

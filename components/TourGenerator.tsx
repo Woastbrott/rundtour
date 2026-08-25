@@ -9,7 +9,6 @@ import { ElevationProfile } from "@/components/ElevationProfile";
 import { RouteMap, type MapPadding } from "@/components/RouteMap";
 import { RouteStats } from "@/components/RouteStats";
 import { downloadGpx } from "@/lib/gpx";
-import { exportToKomoot } from "@/lib/komoot";
 import type { LatLon, Position3, RouteCandidate } from "@/lib/ors/schema";
 import type { NetworkPreference } from "@/lib/routing/adapter";
 import type { GenerateEvent, Suggestion } from "@/lib/routing/candidates";
@@ -114,7 +113,6 @@ export function TourGenerator() {
   const [hoverPoint, setHoverPoint] = useState<Position3 | null>(null);
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
-  const [komootHint, setKomootHint] = useState<string | null>(null);
 
   const [detent, setDetent] = useState<Detent>("full");
   const [sheetHeight, setSheetHeight] = useState(168);
@@ -139,7 +137,6 @@ export function TourGenerator() {
     setSuggestion(null);
     setError(null);
     setHoverPoint(null);
-    setKomootHint(null);
     pinned.current = false;
   }, []);
 
@@ -277,20 +274,6 @@ export function TourGenerator() {
     downloadGpx(active, tourName);
   }, [active, tourName]);
 
-  const exportKomoot = useCallback(async () => {
-    if (!active) return;
-    setKomootHint(null);
-    const result = await exportToKomoot(active, tourName);
-    if (result === "downloaded") {
-      // Der Nutzer landet auf komoots Upload-Seite und braucht den naechsten Schritt.
-      setKomootHint(
-        "GPX heruntergeladen und komoot geöffnet — dort einloggen und die Datei über „GPS-Datei importieren“ hochladen.",
-      );
-    } else if (result === "shared") {
-      setKomootHint("An komoot übergeben.");
-    }
-  }, [active, tourName]);
-
   const padding: MapPadding = useMemo(
     () =>
       compact
@@ -345,12 +328,7 @@ export function TourGenerator() {
           setHoverPoint(null);
         }}
       />
-      <RouteStats
-        candidate={active}
-        onExportGpx={exportGpx}
-        onExportKomoot={() => void exportKomoot()}
-        komootHint={komootHint}
-      />
+      <RouteStats candidate={active} onExportGpx={exportGpx} />
       {/* key: neue Route -> frische Komponente, kein Hover-Rest von der vorigen. */}
       <ElevationProfile key={active.id} candidate={active} onHover={setHoverPoint} />
     </div>

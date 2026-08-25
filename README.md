@@ -1,10 +1,10 @@
 # Rundtour
 
 Generiert aus **Startpunkt + Zieldauer (oder Zieldistanz) + Höhenstufe + Tempo** mehrere
-zufällige Rundtouren, zeigt sie auf der Karte und exportiert sie als GPX oder nach komoot.
+zufällige Rundtouren, zeigt sie auf der Karte und exportiert sie als GPX.
 Zwei Profile — **Rennrad** und **Radtour gemütlich** — beide mit einem Regler, wie stark die
 Route den beschilderten Radwegweisern folgen soll, und vier Tempo-Stufen von „gemütlich"
-bis „Profi".
+bis „Pogačar".
 
 Kein Login, keine Datenbank, keine Persistenz. Reload = leerer Zustand.
 
@@ -59,7 +59,8 @@ lib/
   cache.ts                      TTL-Cache
   spring.ts                     Feder-Physik fürs Bottom-Sheet
   gpx.ts                        GPX 1.1 von Hand
-profiles/trekking-base.brf      Vorlage für die drei Netz-Stufen
+profiles/trekking-base.brf      Vorlage Radtour (BRouter-Profil)
+profiles/fastbike-base.brf      Vorlage Rennrad (BRouter-Profil)
 components/
   TourGenerator.tsx             Zustand, Stream-Verarbeitung, Layout-Weiche
   RouteMap.tsx                  MapLibre
@@ -75,7 +76,7 @@ umgesetzt ist, wie die Konstanten ausgemessen wurden und was `only` nicht garant
 
 Alle Werte in [`lib/routing/constants.ts`](lib/routing/constants.ts).
 
-**`LOOP_RADIUS_FACTOR = 0.58`** ist der wichtigste. Er bestimmt, wie groß der Wegpunkt-Ring
+**`LOOP_RADIUS_FACTOR = 0.72`** ist der wichtigste. Er bestimmt, wie groß der Wegpunkt-Ring
 um den Start wird, und damit die Distanz. Ausgemessen über Radolfzell — in einer anderen
 Gegend nachmessen, Seen und Berge verschieben das deutlich.
 
@@ -99,9 +100,9 @@ in ROUTING.md.
 - **Lange Runden dauern.** 150 km brauchen rund 35 s, weil die Kandidaten sequenziell und
   mit Pause gegen einen Community-Server laufen. Der Fortschritt im Button ist echt.
 - **`cycling-road` ist kein echtes Rennradprofil** (nur im ORS-Fallback relevant).
-- **Kein echter Direktexport nach komoot.** komoot hat keine offene API (B2B-Partnervertrag
-  nötig). Der Button teilt am Handy die GPX über den System-Dialog an die komoot-App und
-  öffnet am Desktop die Import-Seite mit heruntergeladener Datei. Details in ROUTING.md.
+- **Kein Direktexport nach komoot.** komoot hat keine offene API (B2B-Partnervertrag nötig),
+  also bleibt der GPX-Export. Den frisst komoot über „GPS-Datei importieren". Details in
+  ROUTING.md.
 - **Die Tempo-Stufen sind eigene Werte**, keine von komoot übernommenen — komoot
   veröffentlicht die km/h hinter seinen Fitnessleveln nicht.
 

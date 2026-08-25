@@ -28,7 +28,8 @@ export const PACE_LABEL: Record<Pace, string> = {
   gemuetlich: "gemütlich",
   normal: "normal",
   sportlich: "sportlich",
-  profi: "Profi",
+  // Der Schlüssel bleibt "profi" — er steckt in Request und Cache-Key, das Label ist frei.
+  profi: "Pogačar",
 };
 
 /**
