@@ -129,34 +129,31 @@ async function orsFetch(path: string, init: RequestInit): Promise<unknown> {
   return response.json();
 }
 
-export type RoundTripResult = {
+export type OrsRouteResult = {
   coordinates: Position3[];
   distance: number;
   ascent: number;
   descent: number;
 };
 
-export async function fetchRoundTrip(args: {
-  start: LatLon;
+/**
+ * Reines Prosa-Routing über die übergebenen Wegpunkte.
+ *
+ * `round_trip` ist hier bewusst raus: die Rundtour-Wegpunkte erzeugt jetzt
+ * lib/routing/loop.ts, damit beide Engines dieselbe Schleifenform bekommen und
+ * vergleichbar bleiben.
+ */
+export async function fetchRoute(args: {
+  waypoints: ReadonlyArray<readonly [number, number]>;
   profile: Profile;
-  lengthM: number;
-  points: number;
-  seed: number;
-}): Promise<RoundTripResult> {
+}): Promise<OrsRouteResult> {
   const raw = await orsFetch(`/v2/directions/${ORS_PROFILE[args.profile]}/geojson`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/geo+json" },
     body: JSON.stringify({
-      coordinates: [[args.start.lon, args.start.lat]],
+      coordinates: args.waypoints.map(([lon, lat]) => [lon, lat]),
       elevation: true,
       instructions: false,
-      options: {
-        round_trip: {
-          length: Math.round(args.lengthM),
-          points: args.points,
-          seed: args.seed,
-        },
-      },
     }),
   });
 
@@ -221,30 +218,3 @@ export async function geocodeSearch(text: string, focus?: LatLon): Promise<Geoco
   }));
 }
 
-/**
- * Requests mit begrenzter Parallelität abarbeiten.
- * Einzelne Fehlschläge kippen nicht den ganzen Durchlauf — bei round_trip ist es
- * normal, dass ein Seed nichts findet.
- */
-export async function runPool<T, R>(
-  items: readonly T[],
-  limit: number,
-  worker: (item: T) => Promise<R>,
-): Promise<Array<{ ok: true; value: R } | { ok: false; error: unknown }>> {
-  const results = new Array<{ ok: true; value: R } | { ok: false; error: unknown }>(items.length);
-  let cursor = 0;
-
-  async function drain(): Promise<void> {
-    while (cursor < items.length) {
-      const index = cursor++;
-      try {
-        results[index] = { ok: true, value: await worker(items[index]) };
-      } catch (error) {
-        results[index] = { ok: false, error };
-      }
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, drain));
-  return results;
-}

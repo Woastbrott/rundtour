@@ -12,6 +12,32 @@ export function haversineM(a: readonly number[], b: readonly number[]): number {
   return 2 * EARTH_R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+/**
+ * Zielpunkt aus Start, Peilung und Distanz (Großkreis).
+ * Basis für die Rundtour-Wegpunkte, seit BRouter kein round_trip kennt.
+ */
+export function destination(
+  lon: number,
+  lat: number,
+  distanceM: number,
+  bearingRad: number,
+): [number, number] {
+  const δ = distanceM / EARTH_R;
+  const φ1 = (lat * Math.PI) / 180;
+  const λ1 = (lon * Math.PI) / 180;
+
+  const sinφ2 = Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(bearingRad);
+  const φ2 = Math.asin(Math.min(1, Math.max(-1, sinφ2)));
+  const λ2 =
+    λ1 +
+    Math.atan2(
+      Math.sin(bearingRad) * Math.sin(δ) * Math.cos(φ1),
+      Math.cos(δ) - Math.sin(φ1) * sinφ2,
+    );
+
+  return [(((λ2 * 180) / Math.PI + 540) % 360) - 180, (φ2 * 180) / Math.PI];
+}
+
 export function boundsOf(coordinates: readonly Position3[]): [number, number, number, number] {
   let minLon = Infinity;
   let minLat = Infinity;

@@ -1,6 +1,6 @@
 /**
  * Alle nachjustierbaren Stellschrauben des Generators an einem Ort.
- * Die ORS-bezogenen Werte sind gemessen, nicht geraten — siehe ORS_LENGTH_COMPENSATION.
+ * Die Zahlen hier sind gemessen, nicht geraten — die Herkunft steht jeweils dabei.
  */
 
 export const PROFILES = ["road", "tour"] as const;
@@ -33,12 +33,27 @@ export const TERRAIN_LABEL: Record<Terrain, string> = {
   bergig: "bergig",
 };
 
-/** Ziel-Höhenmeter pro Kilometer je Stufe. Startwerte, bewusst grob. */
+/**
+ * Ziel-Höhenmeter pro Kilometer je Stufe.
+ *
+ * ACHTUNG, diese Werte gehören zu BRouters `filtered ascend` und sind rund ein
+ * Drittel der alten ORS-Werte (3/8/15/25). Das ist kein Tippfehler: BRouter
+ * filtert Höhenrauschen weg, ORS nicht. Gemessen liegt roh/gefiltert bei ~1.74,
+ * ORS lag nochmal etwa 1.5–2x über BRouters Rohwert.
+ *
+ * Neu ausgemessen am 24.08.2026 über Radolfzell: 16 Runden zwischen 25 und
+ * 100 km ergaben 1.6 bis 9.7 hm/km, Median ~4.9. Die vier Stufen spannen diesen
+ * Bereich auf, mit Luft nach oben für bergigere Gegenden.
+ *
+ * Wichtig fürs Verständnis der Ergebnisse: hm/km steigt hier mit der Distanz.
+ * Kurze Runden bleiben im flachen Seebecken, lange greifen in den Hegau aus —
+ * eine 25-km-Runde wird um Radolfzell nie "bergig", egal was der Regler sagt.
+ */
 export const TARGET_HM_PER_KM: Record<Terrain, number> = {
-  flach: 3,
-  wellig: 8,
-  huegelig: 15,
-  bergig: 25,
+  flach: 1.5,
+  wellig: 3,
+  huegelig: 5,
+  bergig: 8,
 };
 
 /** Scoring-Gewichte: Distanzabweichung wiegt schwerer als Höhenabweichung. */
@@ -54,28 +69,45 @@ export const DISTANCE_TOLERANCE = 0.25;
  */
 export const RELAXED_TOLERANCE = 0.45;
 
-/** Nenner-Untergrenze beim Höhen-Score, damit "flach" nicht durch 3 dividiert explodiert. */
-export const HM_SCORE_FLOOR = 5;
+/**
+ * Nenner-Untergrenze beim Höhen-Score, damit "flach" nicht durch einen winzigen
+ * Zielwert dividiert explodiert. Musste mit der Tabelle mitwandern (vorher 5):
+ * bei Zielwerten von 1.5 bis 8 hätte eine Untergrenze von 5 den Höhenterm für
+ * die unteren drei Stufen praktisch eingeebnet und den Regler entwertet.
+ */
+export const HM_SCORE_FLOOR = 2;
 
-export const CANDIDATE_COUNT = 8;
+export const CANDIDATE_COUNT = 5;
 /** Zweiter Anlauf ist kleiner — er kostet Kontingent und ist die Ausnahme. */
-export const RETRY_CANDIDATE_COUNT = 6;
+export const RETRY_CANDIDATE_COUNT = 3;
 export const RESULT_COUNT = 3;
 
+/* ------------------------------------------------------------------ *
+ * Rundtour-Wegpunkte (BRouter hat kein round_trip, wir bauen den Ring selbst)
+ * ------------------------------------------------------------------ */
+
+/** Zwischenziele auf dem Ring. */
+export const LOOP_POINTS = 5;
+
 /**
- * ORS liefert bei round_trip verlässlich MEHR als die angeforderte `length`.
- * Gemessen am 23.08.2026 über Radolfzell, cycling-road, 15 Seeds, 3 Zieldistanzen:
- * Ist/Soll lag zwischen 1.15 und 1.62, Median ~1.28. Ohne Vorkompensation würde
- * der ±25%-Filter praktisch jeden Kandidaten verwerfen.
- * -> Wir fragen 1/1.28 ≈ 0.78 der Zieldistanz an.
+ * Radius des Wegpunkt-Rings, als Faktor auf Zieldistanz/(2π).
+ *
+ * Der naive Wert wäre 1.0 (Kreisumfang), plus Zuschlag für Straßenumwege. Das
+ * ist falsch, weil der Start im *Zentrum* des Rings liegt: der Weg ist einmal
+ * Radius raus, vier Sehnen zwischen den Ringpunkten, einmal Radius zurück —
+ * geometrisch rund 6.7·r statt 2π·r. Zusammen mit realen Straßenumwegen kam
+ * mit dem Startwert 1.15 die 2.2-fache Zieldistanz heraus.
+ *
+ * Gemessen am 24.08.2026 über Radolfzell: Faktor 0.42 -> Ist/Soll 0.73,
+ * 0.52 -> 0.90, 0.62 -> 1.02…1.09. Daraus 0.58 als Mitte.
+ * In einer anderen Gegend nachmessen — Seen und Berge verschieben das.
  */
-export const ORS_LENGTH_COMPENSATION = 0.78;
+export const LOOP_RADIUS_FACTOR = 0.58;
 
-/** round_trip.points je Kandidat, zyklisch — mehr Formvielfalt bei ähnlicher Längen-Charakteristik. */
-export const ROUND_TRIP_POINTS = [4, 5, 6] as const;
+/** Radius-Jitter je Punkt: Faktor zwischen MIN und MIN+SPAN. Ohne das wird es ein Kreis. */
+export const LOOP_JITTER_MIN = 0.85;
+export const LOOP_JITTER_SPAN = 0.3;
 
-/** Parallele ORS-Requests. Free Tier verträgt mehr, aber es gibt keinen Grund zu drängeln. */
-export const ORS_CONCURRENCY = 4;
 
 /** Abweichung der geschätzten Dauer vom Ziel, ab der einmal nachkorrigiert wird. */
 export const DURATION_CORRECTION_THRESHOLD = 0.15;

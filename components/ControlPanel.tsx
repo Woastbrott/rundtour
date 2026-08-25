@@ -3,6 +3,7 @@
 import { PlaceSearch } from "@/components/PlaceSearch";
 import { Segmented } from "@/components/ui/Segmented";
 import { Slider } from "@/components/ui/Slider";
+import type { NetworkPreference } from "@/lib/routing/adapter";
 import type { LatLon } from "@/lib/ors/schema";
 import {
   DISTANCE_RANGE_KM,
@@ -38,10 +39,17 @@ type Props = {
   terrain: Terrain;
   onTerrainChange: (terrain: Terrain) => void;
 
+  networkPreference: NetworkPreference;
+  onNetworkChange: (preference: NetworkPreference) => void;
+
   onGenerate: () => void;
   loading: boolean;
+  /** Wie viele Runden schon durch sind — nur gesetzt, solange gerechnet wird. */
+  progress: { done: number; total: number } | null;
   hasResults: boolean;
   error: string | null;
+  /** Direkt ausführbarer Ausweg, wenn der Netz-Regler zu streng war. */
+  suggestion: { label: string; onApply: () => void } | null;
 };
 
 const PROFILE_OPTIONS = [
@@ -55,6 +63,24 @@ const MODE_OPTIONS = [
 ] as const satisfies ReadonlyArray<{ value: TargetMode; label: string }>;
 
 const TERRAIN_TICKS = TERRAINS.map((t) => TERRAIN_LABEL[t]);
+
+/*
+ * Kurze Segment-Labels, ausführliche Erklärung darunter — in einem 340-px-Panel
+ * passen "Beschilderte bevorzugen" und "Möglichst nur beschilderte" nicht
+ * nebeneinander. Der Hilfetext sagt dafür ehrlich, was die Stufe bedeutet.
+ */
+const NETWORK_OPTIONS = [
+  { value: "ignore", label: "Egal" },
+  { value: "prefer", label: "Bevorzugen" },
+  { value: "only", label: "Nur Radnetz" },
+] as const satisfies ReadonlyArray<{ value: NetworkPreference; label: string }>;
+
+const NETWORK_HELP: Record<NetworkPreference, string> = {
+  ignore: "Beste Strecke, egal ob beschildert.",
+  prefer: "Nutzt die Radwegweiser, weicht aber ab, wenn es sich lohnt.",
+  // Kein Versprechen: stick_to_cycleroutes ist eine starke Gewichtung, keine Sperre.
+  only: "Bleibt möglichst auf dem beschilderten Radnetz — kann längere Umwege bedeuten.",
+};
 
 export function ControlPanel(props: Props) {
   const {
@@ -74,10 +100,14 @@ export function ControlPanel(props: Props) {
     onKmChange,
     terrain,
     onTerrainChange,
+    networkPreference,
+    onNetworkChange,
     onGenerate,
     loading,
+    progress,
     hasResults,
     error,
+    suggestion,
   } = props;
 
   const terrainIndex = TERRAINS.indexOf(terrain);
@@ -174,6 +204,25 @@ export function ControlPanel(props: Props) {
           onChange={(i) => onTerrainChange(TERRAINS[i])}
           ticks={TERRAIN_TICKS}
         />
+
+        {/*
+          Nur beim gemütlichen Profil: das Radnetz führt über Radwege und teils
+          unbefestigte Abschnitte, was dem Rennrad-Profil direkt widerspricht.
+        */}
+        {profile === "tour" ? (
+          <div className="flex flex-col gap-2">
+            <h2 className="t-label">Beschilderte Radwege</h2>
+            <Segmented
+              label="Wie stark den Radwegweisern folgen"
+              options={NETWORK_OPTIONS}
+              value={networkPreference}
+              onChange={onNetworkChange}
+            />
+            <p className="text-[12px] leading-snug text-ink-secondary">
+              {NETWORK_HELP[networkPreference]}
+            </p>
+          </div>
+        ) : null}
       </section>
 
       {/* Aktion --------------------------------------------------------- */}
@@ -182,15 +231,46 @@ export function ControlPanel(props: Props) {
           type="button"
           onClick={onGenerate}
           disabled={!start || loading}
-          className="relative w-full rounded-[13px] bg-accent px-4 py-3 text-[16px] font-semibold tracking-[-0.01em] text-accent-ink transition-[transform,opacity] duration-150 ease-ios active:scale-[0.985] active:opacity-90 disabled:pointer-events-none disabled:opacity-35"
+          aria-live="polite"
+          className="relative w-full overflow-hidden rounded-[13px] bg-accent px-4 py-3 text-[16px] font-semibold tracking-[-0.01em] text-accent-ink transition-[transform,opacity] duration-150 ease-ios active:scale-[0.985] active:opacity-90 disabled:pointer-events-none disabled:opacity-60"
         >
-          {loading ? "Suche Runden…" : hasResults ? "Neu würfeln" : "Touren generieren"}
+          {/*
+            Fortschrittsbalken im Button statt daneben: die Runden laufen
+            sequenziell gegen einen fremden Server, das dauert. Ohne echten
+            Fortschritt sieht die Wartezeit nach Absturz aus.
+          */}
+          {loading && progress ? (
+            <span
+              aria-hidden
+              className="absolute inset-y-0 left-0 bg-white/20 transition-[width] duration-300 ease-ios"
+              style={{ width: `${(progress.done / progress.total) * 100}%` }}
+            />
+          ) : null}
+          <span className="relative">
+            {loading
+              ? progress
+                ? `Runde ${progress.done} von ${progress.total}…`
+                : "Suche Runden…"
+              : hasResults
+                ? "Neu würfeln"
+                : "Touren generieren"}
+          </span>
         </button>
 
         {error ? (
           <p role="alert" className="t-body text-route">
             {error}
           </p>
+        ) : null}
+
+        {suggestion ? (
+          <button
+            type="button"
+            onClick={suggestion.onApply}
+            className="w-full rounded-[11px] bg-sunken px-4 py-2.5 text-[14px] font-medium text-accent transition-[transform,opacity] duration-150 ease-ios active:scale-[0.985] active:opacity-70"
+          >
+            Auf „{suggestion.label}“ wechseln und neu suchen
+          </button>
         ) : null}
       </section>
     </div>

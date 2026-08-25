@@ -1,91 +1,82 @@
 import "server-only";
 
-import { directionsBudget } from "@/lib/ors/budget";
-import { fetchRoundTrip, OrsError, runPool } from "@/lib/ors/client";
-import type { GenerateRequest, GenerateResponse, LatLon, Position3, RouteCandidate } from "@/lib/ors/schema";
+import { BROUTER_REQUEST_GAP_MS } from "@/lib/brouter/constants";
+import type { GenerateRequest, Position3, RouteCandidate } from "@/lib/ors/schema";
+import {
+  RoutingError,
+  type NetworkPreference,
+  type RouteResult,
+  type RoutingAdapter,
+} from "./adapter";
 import {
   CANDIDATE_COUNT,
   DISTANCE_TOLERANCE,
   DURATION_CORRECTION_THRESHOLD,
   HM_SCORE_FLOOR,
-  ORS_CONCURRENCY,
-  ORS_LENGTH_COMPENSATION,
   RELAXED_TOLERANCE,
   RESULT_COUNT,
   RETRY_CANDIDATE_COUNT,
-  ROUND_TRIP_POINTS,
   SCORE_WEIGHTS,
   TARGET_HM_PER_KM,
   type Profile,
 } from "./constants";
+import { routingEngine } from "./engine";
 import { distanceFromDurationKm, estimateDurationHours } from "./estimate";
 import { boundsOf, compactness } from "./geo";
+import { loopWaypoints } from "./loop";
 
 /** Unter diesem Wert ist es keine Runde, sondern eine Strecke hin und zurück. */
 const MIN_COMPACTNESS = 0.04;
 
-type RawCandidate = {
-  seed: number;
-  distance: number;
-  ascent: number;
-  descent: number;
-  coordinates: Position3[];
+/** Ab so wenigen Treffern bei "only" ist der Netz-Regler das Problem, nicht der Zufall. */
+const NETWORK_FALLBACK_THRESHOLD = 2;
+
+/* ------------------------------------------------------------------ *
+ * Ereignisse, die der Route Handler als NDJSON weiterreicht
+ * ------------------------------------------------------------------ */
+
+/** Ein direkt ausführbarer Vorschlag — im UI ein Button, kein Fließtext. */
+export type Suggestion = {
+  kind: "networkPreference";
+  value: NetworkPreference;
+  label: string;
 };
 
-/** Seeds deterministisch aus dem Request ableiten: gleicher Request -> gleiche Runden. */
-function seedsFor(nonce: number, batch: number, count: number): number[] {
-  const base = nonce * 1000 + batch * 100;
-  return Array.from({ length: count }, (_, i) => base + i + 1);
-}
+export type GenerateEvent =
+  | { type: "progress"; done: number; total: number }
+  | { type: "candidate"; candidate: RouteCandidate }
+  | {
+      type: "result";
+      targetKm: number;
+      targetHmPerKm: number;
+      count: number;
+      requests: number;
+      notice?: string;
+      suggestion?: Suggestion;
+    }
+  | { type: "error"; message: string; status: number; suggestion?: Suggestion };
 
-async function requestBatch(
-  start: LatLon,
-  profile: Profile,
-  targetKm: number,
-  seeds: readonly number[],
-): Promise<{ candidates: RawCandidate[]; firstError?: OrsError }> {
-  const lengthM = targetKm * 1000 * ORS_LENGTH_COMPENSATION;
+/* ------------------------------------------------------------------ *
+ * Scoring — Formel und Gewichte unverändert
+ * ------------------------------------------------------------------ */
 
-  const results = await runPool(seeds, ORS_CONCURRENCY, async (seed) => {
-    const points = ROUND_TRIP_POINTS[seed % ROUND_TRIP_POINTS.length];
-    const route = await fetchRoundTrip({ start, profile, lengthM, points, seed });
-    return { seed, ...route } satisfies RawCandidate;
-  });
-
-  const candidates: RawCandidate[] = [];
-  let firstError: OrsError | undefined;
-  for (const r of results) {
-    if (r.ok) candidates.push(r.value);
-    else if (!firstError && r.error instanceof OrsError) firstError = r.error;
-  }
-  return { candidates, firstError };
-}
-
-/**
- * Wonach ein Kandidat gemessen wird.
- *
- * Im Distanz-Modus ist das die Distanz — wie vorgegeben. Im Dauer-Modus messen wir
- * gegen die Dauer statt gegen die Ersatz-Zieldistanz: der Nutzer hat eine Zeit
- * genannt, und die Umrechnung Dauer->Distanz ist nur eine Hilfsgröße für den
- * ORS-Call. Über die Distanz zu filtern warf sonst genau die Kandidaten weg,
- * die die Zeit am besten trafen.
- */
 type Objective =
   | { kind: "distance"; targetKm: number }
   | { kind: "duration"; targetH: number; targetKm: number };
 
-/** Relative Abweichung vom Ziel — die Größe, die Filter und Score gemeinsam nutzen. */
-function primaryDeviation(
-  objective: Objective,
-  distanceKm: number,
-  durationH: number,
-): number {
+function primaryDeviation(objective: Objective, distanceKm: number, durationH: number): number {
   return objective.kind === "distance"
     ? Math.abs(distanceKm - objective.targetKm) / objective.targetKm
     : Math.abs(durationH - objective.targetH) / objective.targetH;
 }
 
-function scoreOf(objective: Objective, distanceKm: number, durationH: number, hmPerKm: number, targetHmPerKm: number): number {
+function scoreOf(
+  objective: Objective,
+  distanceKm: number,
+  durationH: number,
+  hmPerKm: number,
+  targetHmPerKm: number,
+): number {
   return (
     SCORE_WEIGHTS.distance * primaryDeviation(objective, distanceKm, durationH) +
     SCORE_WEIGHTS.elevation *
@@ -93,30 +84,32 @@ function scoreOf(objective: Objective, distanceKm: number, durationH: number, hm
   );
 }
 
-/** Auf ~1 m Genauigkeit runden — spart rund die Hälfte der Payload, sichtbar ist der Unterschied nicht. */
-function trim(coordinates: readonly Position3[]): Position3[] {
-  return coordinates.map(([lon, lat, ele]) => [
-    Math.round(lon * 1e5) / 1e5,
-    Math.round(lat * 1e5) / 1e5,
-    Math.round(ele),
+/** Auf ~1 m runden — halbiert die Payload, sichtbar ist der Unterschied nicht. */
+function trim(coordinates: ReadonlyArray<readonly number[]>): Position3[] {
+  return coordinates.map((c) => [
+    Math.round(c[0] * 1e5) / 1e5,
+    Math.round(c[1] * 1e5) / 1e5,
+    Math.round(c[2] ?? 0),
   ]);
 }
 
+type Raw = { seed: number; result: RouteResult };
+
 function toCandidate(
-  raw: RawCandidate,
+  raw: Raw,
   profile: Profile,
   objective: Objective,
   targetHmPerKm: number,
 ): RouteCandidate {
-  const distanceKm = raw.distance / 1000;
-  const hmPerKm = raw.ascent / Math.max(distanceKm, 0.001);
-  const durationH = estimateDurationHours(distanceKm, raw.ascent, profile);
-  const coordinates = trim(raw.coordinates);
+  const distanceKm = raw.result.distanceM / 1000;
+  const hmPerKm = raw.result.ascentM / Math.max(distanceKm, 0.001);
+  const durationH = estimateDurationHours(distanceKm, raw.result.ascentM, profile);
+  const coordinates = trim(raw.result.geometry);
   return {
     id: `s${raw.seed}`,
-    distance: raw.distance,
-    ascent: raw.ascent,
-    descent: raw.descent,
+    distance: raw.result.distanceM,
+    ascent: raw.result.ascentM,
+    descent: raw.result.descentM,
     hmPerKm,
     durationH,
     score: scoreOf(objective, distanceKm, durationH, hmPerKm, targetHmPerKm),
@@ -125,42 +118,39 @@ function toCandidate(
   };
 }
 
-/** Fast identische Runden aussortieren — gleiche Länge, gleicher Anstieg, gleiche Ausdehnung. */
-function dedupe(candidates: readonly RouteCandidate[]): RouteCandidate[] {
-  const seen = new Set<string>();
-  const out: RouteCandidate[] = [];
-  for (const c of candidates) {
-    const key = [
-      Math.round(c.distance / 500),
-      Math.round(c.ascent / 25),
-      Math.round(c.bbox[0] * 100),
-      Math.round(c.bbox[1] * 100),
-      Math.round(c.bbox[2] * 100),
-      Math.round(c.bbox[3] * 100),
-    ].join(":");
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(c);
-  }
-  return out;
-}
-
-function viable(
-  raw: RawCandidate,
-  objective: Objective,
-  profile: Profile,
-  tolerance: number,
-): boolean {
-  const distanceKm = raw.distance / 1000;
-  const durationH = estimateDurationHours(distanceKm, raw.ascent, profile);
+function viable(raw: Raw, objective: Objective, profile: Profile, tolerance: number): boolean {
+  const distanceKm = raw.result.distanceM / 1000;
+  const durationH = estimateDurationHours(distanceKm, raw.result.ascentM, profile);
   if (primaryDeviation(objective, distanceKm, durationH) > tolerance) return false;
-  // Zweiter Filter neben der Toleranz: ORS liefert regelmäßig Nicht-Runden zurück.
-  // Der gilt immer, auch in der gelockerten Runde — Unsinn bleibt Unsinn.
-  return compactness(raw.coordinates, raw.distance) >= MIN_COMPACTNESS;
+  return compactness(trim(raw.result.geometry), raw.result.distanceM) >= MIN_COMPACTNESS;
 }
 
-export async function generateRoutes(request: GenerateRequest): Promise<GenerateResponse> {
+/** Schlüssel zum Aussortieren fast identischer Runden. */
+function dedupeKey(candidate: RouteCandidate): string {
+  return [
+    Math.round(candidate.distance / 500),
+    Math.round(candidate.ascent / 25),
+    ...candidate.bbox.map((v) => Math.round(v * 100)),
+  ].join(":");
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/* ------------------------------------------------------------------ *
+ * Ablauf
+ * ------------------------------------------------------------------ */
+
+export async function* generateRoutes(
+  request: GenerateRequest,
+  signal?: AbortSignal,
+): AsyncGenerator<GenerateEvent> {
   const { start, profile, terrain, target, nonce } = request;
+  // Beim Rennrad ist der Regler ausgeblendet; die Stufe wird trotzdem hart auf
+  // "ignore" gezogen, damit ein alter Client-Zustand nicht durchschlägt.
+  const networkPreference: NetworkPreference =
+    profile === "road" ? "ignore" : request.networkPreference;
+
+  const engine: RoutingAdapter = routingEngine();
   const targetHmPerKm = TARGET_HM_PER_KM[terrain];
 
   let targetKm =
@@ -173,147 +163,162 @@ export async function generateRoutes(request: GenerateRequest): Promise<Generate
       ? { kind: "distance", targetKm: km }
       : { kind: "duration", targetH: target.minutes / 60, targetKm: km };
 
+  const pool: Raw[] = [];
+  const emitted = new Set<string>();
   let requests = 0;
-  let budgetLimited = false;
-  const pool: RawCandidate[] = [];
-  let lastError: OrsError | undefined;
+  let emittedCount = 0;
 
-  /** Fragt so viele Kandidaten an, wie das Minutenbudget noch hergibt. */
-  const runBatch = async (batch: number, count: number, km: number): Promise<number> => {
-    const allowed = Math.min(count, directionsBudget.available());
-    // Merken, ob wir gedrosselt wurden — sonst sähe ein knappes Ergebnis später
-    // wie ein Routing-Problem aus, obwohl es nur am Kontingent lag.
-    if (allowed < count) budgetLimited = true;
-    if (allowed <= 0) return 0;
-    directionsBudget.consume(allowed);
+  const networkSuggestion: Suggestion | undefined =
+    networkPreference === "only"
+      ? { kind: "networkPreference", value: "prefer", label: "Beschilderte bevorzugen" }
+      : undefined;
 
-    const seeds = seedsFor(nonce, batch, allowed);
-    requests += seeds.length;
-    const { candidates, firstError } = await requestBatch(start, profile, km, seeds);
-    if (firstError) lastError = firstError;
-    pool.push(...candidates);
-    return allowed;
-  };
-
-  // Durchlauf 1
-  if ((await runBatch(0, CANDIDATE_COUNT, targetKm)) === 0) {
-    const seconds = Math.ceil(directionsBudget.msUntilFree() / 1000);
-    throw new OrsError(
-      `Zu viele Anfragen in kurzer Zeit. Noch etwa ${seconds} Sekunden warten, dann geht es weiter.`,
-      429,
-      "minute budget exhausted before first batch",
-    );
-  }
-
-  // Wenn ORS jeden einzelnen Seed abgelehnt hat, ist der Startpunkt das Problem — nicht der Filter.
-  if (pool.length === 0) {
-    throw (
-      lastError ??
-      new OrsError(
-        "Von diesem Startpunkt aus kam keine einzige Runde zurück. Anderen Startpunkt probieren.",
-        422,
-      )
-    );
-  }
-
-  /*
-   * Genau ein Nachschlag, und zwar der nützlichere von beiden:
-   * Im Dauer-Modus ist das die Distanzkorrektur (unten), im Distanz-Modus sind es
-   * schlicht neue Seeds. Beides zusammen wären 20 ORS-Calls pro Klick — damit
-   * reißt schon der zweite Klick das Minutenlimit.
+  /**
+   * Läuft die Kandidaten eines Durchgangs sequenziell ab und meldet Fortschritt.
+   * Gibt einen nicht wiederholbaren Fehler als Rückgabewert zurück (per `yield*`
+   * abgreifbar) — über eine äußere Variable könnte TypeScript den Zustand nicht
+   * durch die Closure verfolgen.
    */
-  if (
-    target.mode === "distance" &&
-    pool.filter((c) => viable(c, objectiveFor(targetKm), profile, DISTANCE_TOLERANCE)).length <
-      RESULT_COUNT
-  ) {
-    await runBatch(1, RETRY_CANDIDATE_COUNT, targetKm);
+  async function* runBatch(
+    seeds: readonly number[],
+    km: number,
+    offset: number,
+    total: number,
+  ): AsyncGenerator<GenerateEvent, RoutingError | null> {
+    for (const [index, seed] of seeds.entries()) {
+      if (signal?.aborted) return null;
+      // Nacheinander mit spürbarem Abstand — der Server ist ein Community-Dienst.
+      if (requests > 0) await sleep(BROUTER_REQUEST_GAP_MS);
+      if (signal?.aborted) return null;
+
+      requests += 1;
+      try {
+        const result = await engine.route({
+          waypoints: loopWaypoints(start, km * 1000, seed),
+          profile,
+          networkPreference,
+        });
+        pool.push({ seed, result });
+      } catch (error) {
+        if (error instanceof RoutingError && !error.retryable) return error;
+        // Ein Seed, der nichts findet, ist normal — nächster Kandidat.
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(`[generate] seed ${seed} verworfen: ${reason}`);
+      }
+
+      yield { type: "progress", done: offset + index + 1, total };
+      // Sofort rausgeben statt am Ende des Durchgangs: die erste Route liegt so
+      // auf der Karte, während die restlichen noch gerechnet werden. Genau dafür
+      // ist der Stream da. Die endgültige Reihenfolge macht der Client per Score.
+      yield* flush(km, DISTANCE_TOLERANCE);
+    }
+    return null;
   }
 
-  const buildList = (km: number, tolerance = DISTANCE_TOLERANCE): RouteCandidate[] => {
+  /** Neue, noch nicht gesendete Kandidaten aus dem Pool herausgeben. */
+  function* flush(km: number, tolerance: number): Generator<GenerateEvent> {
     const objective = objectiveFor(km);
-    return dedupe(
-      pool
-        .filter((c) => viable(c, objective, profile, tolerance))
-        .map((c) => toCandidate(c, profile, objective, targetHmPerKm))
-        .sort((a, b) => a.score - b.score),
-    );
-  };
+    const fresh = pool
+      .filter((raw) => viable(raw, objective, profile, tolerance))
+      .map((raw) => toCandidate(raw, profile, objective, targetHmPerKm))
+      .sort((a, b) => a.score - b.score);
 
-  let list = buildList(targetKm);
+    for (const candidate of fresh) {
+      const key = dedupeKey(candidate);
+      if (emitted.has(key)) continue;
+      emitted.add(key);
+      emittedCount += 1;
+      yield { type: "candidate", candidate };
+    }
+  }
+
+  const firstSeeds = Array.from({ length: CANDIDATE_COUNT }, (_, i) => nonce * 1000 + i + 1);
+  const totalPlanned = CANDIDATE_COUNT;
+
+  const firstError = yield* runBatch(firstSeeds, targetKm, 0, totalPlanned);
+  if (signal?.aborted) return;
+  if (firstError) {
+    yield { type: "error", message: firstError.userMessage, status: firstError.status };
+    return;
+  }
+
+  yield* flush(targetKm, DISTANCE_TOLERANCE);
 
   /*
-   * Dauer-Modus: einmal nachkorrigieren, wenn die geschätzte Fahrzeit des besten
-   * Kandidaten mehr als 15 % neben dem Ziel liegt. Hauptursache sind die Höhenmeter —
-   * die kennen wir erst nach dem Routing.
+   * Genau ein Nachschlag. Im Dauer-Modus ist die Distanzkorrektur der nützlichere
+   * Einsatz, im Distanz-Modus sind es schlicht neue Seeds.
    */
   if (target.mode === "duration") {
     const targetH = target.minutes / 60;
-
-    // Referenz ist der beste Treffer; ist noch keiner durch den Filter gekommen,
-    // nehmen wir den aus dem Rohpool, der zeitlich am nächsten dran ist — genau
-    // dann ist die Korrektur am wichtigsten.
-    const reference =
-      list[0]?.durationH ??
-      pool
-        .map((c) => estimateDurationHours(c.distance / 1000, c.ascent, profile))
-        .sort((a, b) => Math.abs(a - targetH) - Math.abs(b - targetH))[0];
+    const reference = pool
+      .map((raw) => estimateDurationHours(raw.result.distanceM / 1000, raw.result.ascentM, profile))
+      .sort((a, b) => Math.abs(a - targetH) - Math.abs(b - targetH))[0];
 
     if (reference && Math.abs(reference - targetH) / targetH > DURATION_CORRECTION_THRESHOLD) {
-      const correctedKm = clampKm(targetKm * (targetH / reference));
-      await runBatch(2, RETRY_CANDIDATE_COUNT, correctedKm);
-      targetKm = correctedKm;
-      list = buildList(targetKm);
-    }
-  }
-
-  if (list.length === 0) {
-    // Erst prüfen, ob überhaupt genug Kandidaten geholt werden durften.
-    if (budgetLimited) {
-      const seconds = Math.max(Math.ceil(directionsBudget.msUntilFree() / 1000), 5);
-      throw new OrsError(
-        `Der Routing-Dienst lässt gerade nicht mehr Anfragen zu. In etwa ${seconds} Sekunden nochmal probieren.`,
-        429,
-        `budget-limited: only ${requests} of the planned requests ran, ${pool.length} raw routes`,
+      targetKm = Math.min(220, Math.max(8, targetKm * (targetH / reference)));
+      const seeds = Array.from(
+        { length: RETRY_CANDIDATE_COUNT },
+        (_, i) => nonce * 1000 + 100 + i + 1,
       );
+      yield* runBatch(seeds, targetKm, totalPlanned, totalPlanned + RETRY_CANDIDATE_COUNT);
+      if (signal?.aborted) return;
+      yield* flush(targetKm, DISTANCE_TOLERANCE);
     }
-    throw new OrsError(
-      "Hier ist keine passende Runde entstanden. Probier einen anderen Startpunkt, eine andere Distanz oder eine flachere Stufe.",
-      422,
-      `no viable candidate from ${pool.length} raw routes`,
+  } else if (emittedCount < RESULT_COUNT) {
+    const seeds = Array.from(
+      { length: RETRY_CANDIDATE_COUNT },
+      (_, i) => nonce * 1000 + 100 + i + 1,
     );
+    yield* runBatch(seeds, targetKm, totalPlanned, totalPlanned + RETRY_CANDIDATE_COUNT);
+    if (signal?.aborted) return;
+    yield* flush(targetKm, DISTANCE_TOLERANCE);
   }
 
-  /*
-   * Reichen die strengen Treffer nicht für drei Vorschläge, lockern wir die Toleranz
-   * einmal auf. Das kostet keinen weiteren ORS-Call, und die Reihenfolge stimmt weiter:
-   * sortiert wird nach Score, der beste Vorschlag bleibt also derselbe. Die zusätzlichen
-   * Runden sind Alternativen, keine besseren Treffer — deshalb steht das auch dran.
-   */
+  // Reichen die strengen Treffer nicht, einmal die Toleranz lockern. Kostet keinen
+  // weiteren Request; die Reihenfolge nach Score bleibt, der beste bleibt der beste.
   let relaxed = false;
-  if (list.length < RESULT_COUNT) {
-    const wider = buildList(targetKm, RELAXED_TOLERANCE);
-    if (wider.length > list.length) {
-      relaxed = true;
-      list = wider;
-    }
+  if (emittedCount < RESULT_COUNT) {
+    const before = emittedCount;
+    yield* flush(targetKm, RELAXED_TOLERANCE);
+    relaxed = emittedCount > before;
   }
 
-  const candidates = list.slice(0, RESULT_COUNT);
+  if (emittedCount === 0) {
+    yield {
+      type: "error",
+      status: 422,
+      message:
+        networkPreference === "only"
+          ? "Auf beschilderten Radwegen ist hier keine passende Runde entstanden."
+          : "Hier ist keine passende Runde entstanden. Probier einen anderen Startpunkt, eine andere Distanz oder eine flachere Stufe.",
+      suggestion: networkSuggestion,
+    };
+    return;
+  }
 
   let notice: string | undefined;
-  if (candidates.length < RESULT_COUNT) {
+  let suggestion: Suggestion | undefined;
+
+  if (networkPreference === "only" && emittedCount < NETWORK_FALLBACK_THRESHOLD) {
     notice =
-      candidates.length === 1
+      "Auf beschilderten Radwegen ist hier kaum etwas Passendes entstanden — das Radnetz gibt diese Runde nicht her.";
+    suggestion = networkSuggestion;
+  } else if (emittedCount < RESULT_COUNT) {
+    notice =
+      emittedCount === 1
         ? "Nur eine Runde hat gepasst — der Rest lag zu weit neben dem Ziel."
-        : `Nur ${candidates.length} von ${RESULT_COUNT} Runden haben gepasst — der Rest lag zu weit neben dem Ziel.`;
+        : `Nur ${emittedCount} von ${RESULT_COUNT} Runden haben gepasst — der Rest lag zu weit neben dem Ziel.`;
   } else if (relaxed) {
     notice = "Runde 1 trifft das Ziel am besten; die Alternativen liegen etwas weiter daneben.";
   }
 
-  return { candidates, targetKm, targetHmPerKm, requests, notice };
-}
-
-function clampKm(km: number): number {
-  return Math.min(220, Math.max(8, km));
+  yield {
+    type: "result",
+    targetKm,
+    targetHmPerKm,
+    count: emittedCount,
+    requests,
+    notice,
+    suggestion,
+  };
 }

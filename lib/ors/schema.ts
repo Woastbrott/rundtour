@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { NETWORK_PREFERENCES } from "@/lib/routing/adapter";
 import {
   DISTANCE_RANGE_KM,
   DURATION_RANGE_MIN,
@@ -30,6 +31,11 @@ export const generateRequestSchema = z.object({
       km: z.number().min(DISTANCE_RANGE_KM.min).max(DISTANCE_RANGE_KM.max),
     }),
   ]),
+  /**
+   * Wie stark sich die Route ans beschilderte Radverkehrsnetz halten soll.
+   * Beim Rennrad-Profil serverseitig auf "ignore" gezwungen.
+   */
+  networkPreference: z.enum(NETWORK_PREFERENCES).default("prefer"),
   /** Wird bei jedem "Neu würfeln" hochgezählt und geht in Seeds + Cache-Key ein. */
   nonce: z.number().int().min(0).max(1_000_000).default(0),
 });

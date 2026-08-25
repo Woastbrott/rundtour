@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 
 import { BottomSheet, type Detent } from "@/components/BottomSheet";
 import { CandidateTabs } from "@/components/CandidateTabs";
@@ -9,8 +9,16 @@ import { ElevationProfile } from "@/components/ElevationProfile";
 import { RouteMap, type MapPadding } from "@/components/RouteMap";
 import { RouteStats } from "@/components/RouteStats";
 import { downloadGpx } from "@/lib/gpx";
-import type { GenerateResponse, LatLon, Position3, RouteCandidate } from "@/lib/ors/schema";
-import { PROFILE_LABEL, TERRAIN_LABEL, type Profile, type Terrain } from "@/lib/routing/constants";
+import type { LatLon, Position3, RouteCandidate } from "@/lib/ors/schema";
+import type { NetworkPreference } from "@/lib/routing/adapter";
+import type { GenerateEvent, Suggestion } from "@/lib/routing/candidates";
+import {
+  PROFILE_LABEL,
+  RESULT_COUNT,
+  TERRAIN_LABEL,
+  type Profile,
+  type Terrain,
+} from "@/lib/routing/constants";
 
 function useIsCompact(): boolean | null {
   const [compact, setCompact] = useState<boolean | null>(null);
@@ -24,11 +32,32 @@ function useIsCompact(): boolean | null {
   return compact;
 }
 
-function errorFrom(data: unknown, fallback: string): string {
-  if (typeof data === "object" && data !== null && "error" in data && typeof data.error === "string") {
-    return data.error;
+/** NDJSON zeilenweise auslesen — eine JSON-Zeile pro Ereignis. */
+async function* readEvents(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<GenerateEvent> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (line) yield JSON.parse(line) as GenerateEvent;
+      }
+    }
+    const rest = buffer.trim();
+    if (rest) yield JSON.parse(rest) as GenerateEvent;
+  } finally {
+    reader.releaseLock();
   }
-  return fallback;
 }
 
 export function TourGenerator() {
@@ -41,9 +70,13 @@ export function TourGenerator() {
   const [minutes, setMinutes] = useState(120);
   const [km, setKm] = useState(45);
   const [terrain, setTerrain] = useState<Terrain>("wellig");
+  const [networkPreference, setNetworkPreference] = useState<NetworkPreference>("prefer");
 
-  const [result, setResult] = useState<GenerateResponse | null>(null);
-  const [selected, setSelected] = useState(0);
+  const [candidates, setCandidates] = useState<RouteCandidate[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,68 +89,125 @@ export function TourGenerator() {
 
   const nonce = useRef(0);
   const inflight = useRef<AbortController | null>(null);
+  /** Hat der Nutzer selbst eine Runde gewählt? Dann nicht mehr automatisch umschalten. */
+  const pinned = useRef(false);
 
-  const candidates: readonly RouteCandidate[] = result?.candidates ?? [];
-  const active = candidates[selected] ?? null;
+  // Beste drei, nach Score. Die Kandidaten trudeln einzeln ein, deshalb wird
+  // hier sortiert und nicht auf die Reihenfolge im Stream vertraut.
+  const ranked = useMemo(
+    () => [...candidates].sort((a, b) => a.score - b.score).slice(0, RESULT_COUNT),
+    [candidates],
+  );
+  const active = ranked.find((c) => c.id === selectedId) ?? ranked[0] ?? null;
 
-  const setStartPoint = useCallback((point: LatLon, label: string | null) => {
-    setStart(point);
-    setStartLabel(label);
-    setLocationError(null);
-    // Alte Vorschläge gehören zum alten Startpunkt.
-    setResult(null);
-    setSelected(0);
+  const clearResults = useCallback(() => {
+    setCandidates([]);
+    setSelectedId(null);
+    setNotice(null);
+    setSuggestion(null);
     setError(null);
     setHoverPoint(null);
+    pinned.current = false;
   }, []);
 
-  const generate = useCallback(async () => {
-    if (!start) return;
-    inflight.current?.abort();
-    const controller = new AbortController();
-    inflight.current = controller;
+  const setStartPoint = useCallback(
+    (point: LatLon, label: string | null) => {
+      setStart(point);
+      setStartLabel(label);
+      setLocationError(null);
+      // Alte Vorschläge gehören zum alten Startpunkt.
+      clearResults();
+    },
+    [clearResults],
+  );
 
-    nonce.current += 1;
-    setLoading(true);
-    setError(null);
-    setHoverPoint(null);
+  const generate = useCallback(
+    async (overrides?: { networkPreference?: NetworkPreference }) => {
+      if (!start) return;
+      inflight.current?.abort();
+      const controller = new AbortController();
+      inflight.current = controller;
 
-    try {
-      const response = await fetch("/api/routes/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          start,
-          profile,
-          terrain,
-          target: mode === "duration" ? { mode, minutes } : { mode, km },
-          nonce: nonce.current,
-        }),
-      });
-      const data: unknown = await response.json();
+      const network = overrides?.networkPreference ?? networkPreference;
+      nonce.current += 1;
 
-      if (!response.ok) {
-        setResult(null);
-        setError(errorFrom(data, "Das Generieren hat nicht geklappt. Nochmal versuchen."));
-        return;
+      clearResults();
+      setLoading(true);
+      setProgress(null);
+
+      const collected: RouteCandidate[] = [];
+
+      try {
+        const response = await fetch("/api/routes/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            start,
+            profile,
+            terrain,
+            // Beim Rennrad ist der Regler ausgeblendet — dann zählt er auch nicht.
+            // Der Server erzwingt dasselbe nochmal.
+            networkPreference: profile === "road" ? "ignore" : network,
+            target: mode === "duration" ? { mode, minutes } : { mode, km },
+            nonce: nonce.current,
+          }),
+        });
+
+        if (!response.ok || !response.body) {
+          const fallback: unknown = await response.json().catch(() => null);
+          setError(
+            typeof fallback === "object" &&
+              fallback !== null &&
+              "error" in fallback &&
+              typeof fallback.error === "string"
+              ? fallback.error
+              : "Das Generieren hat nicht geklappt. Nochmal versuchen.",
+          );
+          return;
+        }
+
+        for await (const event of readEvents(response.body)) {
+          if (controller.signal.aborted) return;
+
+          if (event.type === "progress") {
+            setProgress({ done: event.done, total: event.total });
+          } else if (event.type === "candidate") {
+            collected.push(event.candidate);
+            setCandidates([...collected]);
+            // Solange der Nutzer nicht selbst gewählt hat, folgt die Auswahl dem Besten.
+            if (!pinned.current) {
+              const best = [...collected].sort((a, b) => a.score - b.score)[0];
+              setSelectedId(best.id);
+            }
+          } else if (event.type === "result") {
+            setNotice(event.notice ?? null);
+            setSuggestion(event.suggestion ?? null);
+            if (compact) setDetent("peek");
+          } else if (event.type === "error") {
+            setError(event.message);
+            setSuggestion(event.suggestion ?? null);
+          }
+        }
+      } catch (cause) {
+        if (cause instanceof DOMException && cause.name === "AbortError") return;
+        setError("Die Verbindung ist abgerissen. Netz prüfen und nochmal versuchen.");
+      } finally {
+        if (inflight.current === controller) {
+          inflight.current = null;
+          setLoading(false);
+          setProgress(null);
+        }
       }
+    },
+    [start, profile, terrain, mode, minutes, km, networkPreference, compact, clearResults],
+  );
 
-      const payload = data as GenerateResponse;
-      setResult(payload);
-      setSelected(0);
-      if (compact) setDetent("peek");
-    } catch (cause) {
-      if (cause instanceof DOMException && cause.name === "AbortError") return;
-      setResult(null);
-      setError("Keine Verbindung zum Server. Netz prüfen und nochmal versuchen.");
-    } finally {
-      if (inflight.current === controller) {
-        inflight.current = null;
-        setLoading(false);
-      }
-    }
-  }, [start, profile, terrain, mode, minutes, km, compact]);
+  const applySuggestion = useCallback(() => {
+    if (!suggestion) return;
+    setNetworkPreference(suggestion.value);
+    void generate({ networkPreference: suggestion.value });
+  }, [suggestion, generate]);
 
   const locate = useCallback(() => {
     if (!("geolocation" in navigator)) {
@@ -180,23 +270,29 @@ export function TourGenerator() {
       onKmChange={setKm}
       terrain={terrain}
       onTerrainChange={setTerrain}
-      onGenerate={generate}
+      networkPreference={networkPreference}
+      onNetworkChange={setNetworkPreference}
+      onGenerate={() => void generate()}
       loading={loading}
-      hasResults={candidates.length > 0}
+      progress={progress}
+      hasResults={ranked.length > 0}
       error={error}
+      suggestion={suggestion ? { label: suggestion.label, onApply: applySuggestion } : null}
     />
   );
 
   const results = active ? (
     <div className="flex flex-col gap-3.5">
-      {result?.notice ? (
-        <p className="t-body text-ink-secondary">{result.notice}</p>
-      ) : null}
+      {notice ? <p className="t-body text-ink-secondary">{notice}</p> : null}
       <CandidateTabs
-        candidates={candidates}
-        selected={selected}
+        candidates={ranked}
+        selected={Math.max(
+          0,
+          ranked.findIndex((c) => c.id === active.id),
+        )}
         onSelect={(index) => {
-          setSelected(index);
+          pinned.current = true;
+          setSelectedId(ranked[index].id);
           setHoverPoint(null);
         }}
       />
@@ -238,11 +334,7 @@ export function TourGenerator() {
 
       {/* Mobil: ein Sheet mit zwei Rastpunkten. */}
       {compact === true ? (
-        <BottomSheet
-          detent={detent}
-          onDetentChange={setDetent}
-          onVisibleHeight={setSheetHeight}
-        >
+        <BottomSheet detent={detent} onDetentChange={setDetent} onVisibleHeight={setSheetHeight}>
           <div className="flex flex-col gap-4">
             {results}
             {results ? <hr className="border-separator" /> : null}

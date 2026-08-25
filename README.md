@@ -2,7 +2,8 @@
 
 Generiert aus **Startpunkt + Zieldauer (oder Zieldistanz) + gewünschter Höhenstufe** mehrere
 zufällige Rundtouren, zeigt sie auf der Karte und exportiert sie als GPX.
-Zwei Profile: **Rennrad** (`cycling-road`) und **Radtour gemütlich** (`cycling-regular`).
+Zwei Profile: **Rennrad** und **Radtour gemütlich** — letzteres mit einem Regler, wie stark
+die Route den beschilderten Radwegweisern folgen soll.
 
 Kein Login, keine Datenbank, keine Persistenz. Reload = leerer Zustand.
 
@@ -10,84 +11,94 @@ Kein Login, keine Datenbank, keine Persistenz. Reload = leerer Zustand.
 
 ```bash
 npm install
+npm run dev
 ```
 
-`.env.local` anlegen (Vorlage: `.env.example`):
+Läuft ohne Konfiguration: Routing geht über **BRouter**, das keinen API-Key braucht.
+
+Für die **Ortssuche** (und nur dafür) wird ein ORS-Key gebraucht. `.env.local` anlegen,
+Vorlage ist `.env.example`:
 
 ```
 ORS_API_KEY=dein-key-von-account.heigit.org
 ```
 
-Der Key ist **server-only**. Er wird nie ins Client-Bundle gereicht — alle ORS-Calls laufen über
+Ohne Key funktionieren Karte, Startpunkt per Klick, „Mein Standort" und das gesamte Routing —
+nur die Textsuche nicht.
+
+Der Key ist **server-only** und wird nie ins Client-Bundle gereicht; alle Aufrufe laufen über
 die Route Handler unter `app/api/`.
 
 ```bash
-npm run dev     # http://localhost:3000
 npm run build
 npx tsc --noEmit
 npx eslint .
 ```
-
-Für Vercel: `ORS_API_KEY` als Environment Variable setzen, sonst nichts.
 
 ## Aufbau
 
 ```
 app/
   page.tsx                      Server Component, rendert die Client-Insel
-  api/routes/generate/route.ts  Proxy: Kandidaten + Scoring
-  api/geocode/route.ts          Proxy: Ortssuche
+  api/routes/generate/route.ts  Proxy, antwortet als NDJSON-Stream
+  api/geocode/route.ts          Proxy: Ortssuche (ORS)
 lib/
-  ors/client.ts                 Fetch-Wrapper, server-only, Fehlerübersetzung
-  ors/schema.ts                 Zod-Schemas + API-Vertrag
-  ors/budget.ts                 Minutenbudget-Drossel
-  routing/candidates.ts         Seeds, Scoring, Filter, Korrekturlauf
+  routing/adapter.ts            Interface beider Engines + RoutingError
+  routing/engine.ts             Auswahl per ROUTING_ENGINE
+  routing/candidates.ts         Seeds, Scoring, Filter, Korrekturlauf (Generator)
+  routing/loop.ts               Rundtour-Wegpunkte, seed-basiert
   routing/constants.ts          Alle Stellschrauben
   routing/estimate.ts           Dauer-/Distanz-Modell
-  routing/geo.ts                Haversine, Bounds, Kompaktheit
-  cache.ts                      TTL-Cache gegen Doppelanfragen
+  routing/geo.ts                Haversine, Zielpunkt, Bounds, Kompaktheit
+  brouter/client.ts             BRouterAdapter
+  brouter/profiles.ts           Profil-Upload und -Cache
+  ors/client.ts                 ORS-Fetch, Fehlerübersetzung, Geocoding
+  ors/adapter.ts                OrsAdapter (Fallback)
+  ors/budget.ts                 Minutenbudget-Drossel für ORS
+  cache.ts                      TTL-Cache
   spring.ts                     Feder-Physik fürs Bottom-Sheet
   gpx.ts                        GPX 1.1 von Hand
+profiles/trekking-base.brf      Vorlage für die drei Netz-Stufen
 components/
-  TourGenerator.tsx             Zustand + Layout-Weiche
+  TourGenerator.tsx             Zustand, Stream-Verarbeitung, Layout-Weiche
   RouteMap.tsx                  MapLibre
   ControlPanel.tsx  PlaceSearch.tsx  BottomSheet.tsx
   RouteStats.tsx    CandidateTabs.tsx  ElevationProfile.tsx
   ui/Segmented.tsx  ui/Slider.tsx
 ```
 
+**Routing-Details stehen in [ROUTING.md](ROUTING.md)** — warum BRouter, wie der Netz-Regler
+umgesetzt ist, wie die Konstanten ausgemessen wurden und was `only` nicht garantiert.
+
 ## Was beim Tuning wichtig ist
 
 Alle Werte in [`lib/routing/constants.ts`](lib/routing/constants.ts).
 
-**`ORS_LENGTH_COMPENSATION = 0.78`** ist der wichtigste. ORS liefert bei `round_trip`
-verlässlich **mehr** als die angeforderte `length` — gemessen über Radolfzell (cycling-road,
-15 Seeds, 3 Zieldistanzen) lag Ist/Soll zwischen 1.15 und 1.62, Median ~1.28. Ohne
-Vorkompensation verwirft der ±25 %-Filter praktisch jeden Kandidaten. Wer die App in einer
-anderen Region betreibt, sollte diesen Faktor nachmessen.
+**`LOOP_RADIUS_FACTOR = 0.58`** ist der wichtigste. Er bestimmt, wie groß der Wegpunkt-Ring
+um den Start wird, und damit die Distanz. Ausgemessen über Radolfzell — in einer anderen
+Gegend nachmessen, Seen und Berge verschieben das deutlich.
 
-**`TARGET_HM_PER_KM`** sind Startwerte (3 / 8 / 15 / 25). Im Hegau liefert ORS selten unter
-10 hm/km — „flach" ist dort schlicht nicht verfügbar. Das ist eine Eigenschaft der Gegend,
-kein Fehler: die App zeigt die tatsächlichen Werte an und verspricht vorher nichts.
+**`TARGET_HM_PER_KM`** (1.5 / 3 / 5 / 8) gehört zu BRouters *gefilterten* Höhenmetern und
+ist rund ein Drittel dessen, was ORS melden würde. Kein Tippfehler — Begründung und Messung
+in ROUTING.md.
 
 ## Grenzen, die bekannt sind
 
-- **`cycling-road` ist kein echtes Rennradprofil.** Wenn Routen über Feldwege führen, ist das
-  eine Grenze der ORS-Profile, nicht des Codes.
-- **`round_trip` liefert regelmäßig Nicht-Runden** — Achterschleifen oder Strecken, die auf
-  derselben Straße zurückführen. Dagegen laufen zwei Filter: die ±25 %-Toleranz und ein
-  Kompaktheitsmaß (`4πA/U²`), das eingeschlossene Fläche gegen Umfang stellt und bei einer
-  Hin-und-zurück-Strecke gegen 0 geht.
+- **„Nur Radnetz" ist eine Gewichtung, keine Sperre.** Führt kein beschilderter Weg zum
+  nächsten Wegpunkt, nimmt BRouter die Straße.
+- **Was in OSM fehlt, existiert fürs Routing nicht.** Ein aufgestelltes Schild ist keine
+  Garantie für einen Eintrag im Radnetz.
 - **Höhenmeter treffen nie exakt.** Deshalb vier Stufen statt einer Zahl.
-- **Rate Limits.** Free Tier: 2000 Directions-Requests/Tag, ~40/Minute. Ein Klick auf
-  „Generieren" kostet 8 Calls, mit Nachschlag 14. `lib/ors/budget.ts` zählt in einem
-  gleitenden 60-s-Fenster mit und drosselt, bevor ORS mit einem headerlosen 429 abriegelt.
-  Das Budget gilt pro Serverinstanz — bei mehreren Instanzen bräuchte es einen geteilten Zähler.
+- **Kurze Runden werden nicht bergig.** Um Radolfzell steigt hm/km mit der Distanz — eine
+  25-km-Runde bleibt im flachen Seebecken, egal was der Regler sagt.
+- **Lange Runden dauern.** 150 km brauchen rund 35 s, weil die Kandidaten sequenziell und
+  mit Pause gegen einen Community-Server laufen. Der Fortschritt im Button ist echt.
+- **`cycling-road` ist kein echtes Rennradprofil** (nur im ORS-Fallback relevant).
 
 ## Bewusste Abweichung vom ursprünglichen Konzept
 
-Im **Dauer-Modus** wird gegen die *Dauer* gefiltert und gescort, nicht gegen die aus der Dauer
-abgeleitete Ersatzdistanz. Die Umrechnung Dauer → Distanz ist nur eine Hilfsgröße für den
-ORS-Call; über sie zu filtern warf genau die Kandidaten weg, die die Zeit am besten trafen
-(beste Abweichung vorher 17 %, danach 1 %). Der Distanz-Modus bleibt unverändert.
-Umschaltpunkt ist `primaryDeviation()` in [`lib/routing/candidates.ts`](lib/routing/candidates.ts).
+Im **Dauer-Modus** wird gegen die *Dauer* gefiltert und gescort, nicht gegen die aus der
+Dauer abgeleitete Ersatzdistanz. Die Umrechnung ist nur eine Hilfsgröße für den Routing-Call;
+über sie zu filtern warf genau die Kandidaten weg, die die Zeit am besten trafen (beste
+Abweichung vorher 17 %, danach 1 %). Der Distanz-Modus bleibt unverändert. Umschaltpunkt ist
+`primaryDeviation()` in [`lib/routing/candidates.ts`](lib/routing/candidates.ts).
