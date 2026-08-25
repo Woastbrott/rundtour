@@ -1,9 +1,10 @@
 # Rundtour
 
-Generiert aus **Startpunkt + Zieldauer (oder Zieldistanz) + gewünschter Höhenstufe** mehrere
-zufällige Rundtouren, zeigt sie auf der Karte und exportiert sie als GPX.
-Zwei Profile: **Rennrad** und **Radtour gemütlich** — letzteres mit einem Regler, wie stark
-die Route den beschilderten Radwegweisern folgen soll.
+Generiert aus **Startpunkt + Zieldauer (oder Zieldistanz) + Höhenstufe + Tempo** mehrere
+zufällige Rundtouren, zeigt sie auf der Karte und exportiert sie als GPX oder nach komoot.
+Zwei Profile — **Rennrad** und **Radtour gemütlich** — beide mit einem Regler, wie stark die
+Route den beschilderten Radwegweisern folgen soll, und vier Tempo-Stufen von „gemütlich"
+bis „Profi".
 
 Kein Login, keine Datenbank, keine Persistenz. Reload = leerer Zustand.
 
@@ -98,6 +99,11 @@ in ROUTING.md.
 - **Lange Runden dauern.** 150 km brauchen rund 35 s, weil die Kandidaten sequenziell und
   mit Pause gegen einen Community-Server laufen. Der Fortschritt im Button ist echt.
 - **`cycling-road` ist kein echtes Rennradprofil** (nur im ORS-Fallback relevant).
+- **Kein echter Direktexport nach komoot.** komoot hat keine offene API (B2B-Partnervertrag
+  nötig). Der Button teilt am Handy die GPX über den System-Dialog an die komoot-App und
+  öffnet am Desktop die Import-Seite mit heruntergeladener Datei. Details in ROUTING.md.
+- **Die Tempo-Stufen sind eigene Werte**, keine von komoot übernommenen — komoot
+  veröffentlicht die km/h hinter seinen Fitnessleveln nicht.
 
 ## Bewusste Abweichung vom ursprünglichen Konzept
 

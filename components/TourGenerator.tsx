@@ -9,13 +9,16 @@ import { ElevationProfile } from "@/components/ElevationProfile";
 import { RouteMap, type MapPadding } from "@/components/RouteMap";
 import { RouteStats } from "@/components/RouteStats";
 import { downloadGpx } from "@/lib/gpx";
+import { exportToKomoot } from "@/lib/komoot";
 import type { LatLon, Position3, RouteCandidate } from "@/lib/ors/schema";
 import type { NetworkPreference } from "@/lib/routing/adapter";
 import type { GenerateEvent, Suggestion } from "@/lib/routing/candidates";
 import {
+  DEFAULT_PACE,
   PROFILE_LABEL,
   RESULT_COUNT,
   TERRAIN_LABEL,
+  type Pace,
   type Profile,
   type Terrain,
 } from "@/lib/routing/constants";
@@ -88,6 +91,18 @@ export function TourGenerator() {
     [profile],
   );
 
+  // Tempo genauso: 24 km/h heißt beim Rennrad "normal", bei der Radtour wäre es
+  // schon jenseits von "Profi". Die Stufe gehört also zum Fahrprofil.
+  const [paceByProfile, setPaceByProfile] = useState<Record<Profile, Pace>>({
+    road: DEFAULT_PACE,
+    tour: DEFAULT_PACE,
+  });
+  const pace = paceByProfile[profile];
+  const setPace = useCallback(
+    (value: Pace) => setPaceByProfile((prev) => ({ ...prev, [profile]: value })),
+    [profile],
+  );
+
   const [candidates, setCandidates] = useState<RouteCandidate[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -99,6 +114,7 @@ export function TourGenerator() {
   const [hoverPoint, setHoverPoint] = useState<Position3 | null>(null);
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [komootHint, setKomootHint] = useState<string | null>(null);
 
   const [detent, setDetent] = useState<Detent>("full");
   const [sheetHeight, setSheetHeight] = useState(168);
@@ -123,6 +139,7 @@ export function TourGenerator() {
     setSuggestion(null);
     setError(null);
     setHoverPoint(null);
+    setKomootHint(null);
     pinned.current = false;
   }, []);
 
@@ -163,6 +180,7 @@ export function TourGenerator() {
             profile,
             terrain,
             networkPreference: network,
+            pace,
             target: mode === "duration" ? { mode, minutes } : { mode, km },
             nonce: nonce.current,
           }),
@@ -214,7 +232,7 @@ export function TourGenerator() {
         }
       }
     },
-    [start, profile, terrain, mode, minutes, km, networkPreference, compact, clearResults],
+    [start, profile, terrain, mode, minutes, km, networkPreference, pace, compact, clearResults],
   );
 
   const applySuggestion = useCallback(() => {
@@ -250,13 +268,28 @@ export function TourGenerator() {
     );
   }, [setStartPoint]);
 
+  const tourName = active
+    ? `Rundtour ${(active.distance / 1000).toFixed(0)} km · ${PROFILE_LABEL[profile]} · ${TERRAIN_LABEL[terrain]}`
+    : "";
+
   const exportGpx = useCallback(() => {
     if (!active) return;
-    downloadGpx(
-      active,
-      `Rundtour ${(active.distance / 1000).toFixed(0)} km · ${PROFILE_LABEL[profile]} · ${TERRAIN_LABEL[terrain]}`,
-    );
-  }, [active, profile, terrain]);
+    downloadGpx(active, tourName);
+  }, [active, tourName]);
+
+  const exportKomoot = useCallback(async () => {
+    if (!active) return;
+    setKomootHint(null);
+    const result = await exportToKomoot(active, tourName);
+    if (result === "downloaded") {
+      // Der Nutzer landet auf komoots Upload-Seite und braucht den naechsten Schritt.
+      setKomootHint(
+        "GPX heruntergeladen und komoot geöffnet — dort einloggen und die Datei über „GPS-Datei importieren“ hochladen.",
+      );
+    } else if (result === "shared") {
+      setKomootHint("An komoot übergeben.");
+    }
+  }, [active, tourName]);
 
   const padding: MapPadding = useMemo(
     () =>
@@ -284,6 +317,8 @@ export function TourGenerator() {
       onKmChange={setKm}
       terrain={terrain}
       onTerrainChange={setTerrain}
+      pace={pace}
+      onPaceChange={setPace}
       networkPreference={networkPreference}
       onNetworkChange={setNetworkPreference}
       onGenerate={() => void generate()}
@@ -310,7 +345,12 @@ export function TourGenerator() {
           setHoverPoint(null);
         }}
       />
-      <RouteStats candidate={active} onExport={exportGpx} />
+      <RouteStats
+        candidate={active}
+        onExportGpx={exportGpx}
+        onExportKomoot={() => void exportKomoot()}
+        komootHint={komootHint}
+      />
       {/* key: neue Route -> frische Komponente, kein Hover-Rest von der vorigen. */}
       <ElevationProfile key={active.id} candidate={active} onHover={setHoverPoint} />
     </div>

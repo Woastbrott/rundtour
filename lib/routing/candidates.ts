@@ -18,10 +18,9 @@ import {
   RETRY_CANDIDATE_COUNT,
   SCORE_WEIGHTS,
   TARGET_HM_PER_KM,
-  type Profile,
 } from "./constants";
 import { routingEngine } from "./engine";
-import { distanceFromDurationKm, estimateDurationHours } from "./estimate";
+import { distanceFromDurationKm, estimateDurationHours, type Rider } from "./estimate";
 import { boundsOf, compactness } from "./geo";
 import { loopWaypoints } from "./loop";
 
@@ -97,13 +96,13 @@ type Raw = { seed: number; result: RouteResult };
 
 function toCandidate(
   raw: Raw,
-  profile: Profile,
+  rider: Rider,
   objective: Objective,
   targetHmPerKm: number,
 ): RouteCandidate {
   const distanceKm = raw.result.distanceM / 1000;
   const hmPerKm = raw.result.ascentM / Math.max(distanceKm, 0.001);
-  const durationH = estimateDurationHours(distanceKm, raw.result.ascentM, profile);
+  const durationH = estimateDurationHours(distanceKm, raw.result.ascentM, rider);
   const coordinates = trim(raw.result.geometry);
   return {
     id: `s${raw.seed}`,
@@ -118,9 +117,9 @@ function toCandidate(
   };
 }
 
-function viable(raw: Raw, objective: Objective, profile: Profile, tolerance: number): boolean {
+function viable(raw: Raw, objective: Objective, rider: Rider, tolerance: number): boolean {
   const distanceKm = raw.result.distanceM / 1000;
-  const durationH = estimateDurationHours(distanceKm, raw.result.ascentM, profile);
+  const durationH = estimateDurationHours(distanceKm, raw.result.ascentM, rider);
   if (primaryDeviation(objective, distanceKm, durationH) > tolerance) return false;
   return compactness(trim(raw.result.geometry), raw.result.distanceM) >= MIN_COMPACTNESS;
 }
@@ -144,7 +143,8 @@ export async function* generateRoutes(
   request: GenerateRequest,
   signal?: AbortSignal,
 ): AsyncGenerator<GenerateEvent> {
-  const { start, profile, terrain, target, nonce } = request;
+  const { start, profile, terrain, target, nonce, pace } = request;
+  const rider: Rider = { profile, pace };
   // Der Netz-Regler gilt für beide Fahrprofile — auch fastbike kennt die
   // Radnetz-Variablen, seit sie in profiles/fastbike-base.brf ergänzt sind.
   const networkPreference: NetworkPreference = request.networkPreference;
@@ -155,7 +155,7 @@ export async function* generateRoutes(
   let targetKm =
     target.mode === "distance"
       ? target.km
-      : distanceFromDurationKm(target.minutes / 60, profile);
+      : distanceFromDurationKm(target.minutes / 60, rider);
 
   const objectiveFor = (km: number): Objective =>
     target.mode === "distance"
@@ -218,8 +218,8 @@ export async function* generateRoutes(
   function* flush(km: number, tolerance: number): Generator<GenerateEvent> {
     const objective = objectiveFor(km);
     const fresh = pool
-      .filter((raw) => viable(raw, objective, profile, tolerance))
-      .map((raw) => toCandidate(raw, profile, objective, targetHmPerKm))
+      .filter((raw) => viable(raw, objective, rider, tolerance))
+      .map((raw) => toCandidate(raw, rider, objective, targetHmPerKm))
       .sort((a, b) => a.score - b.score);
 
     for (const candidate of fresh) {
@@ -250,7 +250,7 @@ export async function* generateRoutes(
   if (target.mode === "duration") {
     const targetH = target.minutes / 60;
     const reference = pool
-      .map((raw) => estimateDurationHours(raw.result.distanceM / 1000, raw.result.ascentM, profile))
+      .map((raw) => estimateDurationHours(raw.result.distanceM / 1000, raw.result.ascentM, rider))
       .sort((a, b) => Math.abs(a - targetH) - Math.abs(b - targetH))[0];
 
     if (reference && Math.abs(reference - targetH) / targetH > DURATION_CORRECTION_THRESHOLD) {

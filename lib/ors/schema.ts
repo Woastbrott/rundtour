@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { NETWORK_PREFERENCES } from "@/lib/routing/adapter";
 import {
+  DEFAULT_PACE,
   DISTANCE_RANGE_KM,
   DURATION_RANGE_MIN,
+  PACES,
   PROFILES,
   TERRAINS,
 } from "@/lib/routing/constants";
@@ -36,6 +38,12 @@ export const generateRequestSchema = z.object({
    * Beim Rennrad-Profil serverseitig auf "ignore" gezwungen.
    */
   networkPreference: z.enum(NETWORK_PREFERENCES).default("prefer"),
+  /**
+   * Tempo-Stufe. Ändert nur die Zeitschätzung, nicht die Streckenwahl — im
+   * Dauer-Modus wirkt sie dennoch aufs Ergebnis, weil aus der Zielzeit die
+   * Zieldistanz abgeleitet wird.
+   */
+  pace: z.enum(PACES).default(DEFAULT_PACE),
   /** Wird bei jedem "Neu würfeln" hochgezählt und geht in Seeds + Cache-Key ein. */
   nonce: z.number().int().min(0).max(1_000_000).default(0),
 });

@@ -17,11 +17,45 @@ export const PROFILE_LABEL: Record<Profile, string> = {
   tour: "Radtour",
 };
 
-/** Durchschnittsgeschwindigkeit in der Ebene, km/h. */
-export const BASE_SPEED_KMH: Record<Profile, number> = { road: 24, tour: 15 };
+/* ------------------------------------------------------------------ *
+ * Tempo
+ * ------------------------------------------------------------------ */
+
+export const PACES = ["gemuetlich", "normal", "sportlich", "profi"] as const;
+export type Pace = (typeof PACES)[number];
+
+export const PACE_LABEL: Record<Pace, string> = {
+  gemuetlich: "gemütlich",
+  normal: "normal",
+  sportlich: "sportlich",
+  profi: "Profi",
+};
+
+/**
+ * Durchschnittsgeschwindigkeit in der Ebene, km/h.
+ *
+ * Eigene Werte, keine von komoot übernommenen — komoot veröffentlicht die km/h
+ * hinter seinen Fitnessleveln nicht. Die Stufen sind aber genauso gedacht:
+ * sie ändern nur die Zeitschätzung, nicht die Streckenwahl. (komoot dazu:
+ * "your fitness level will not affect the route ... It will only adjust the
+ * estimated time".)
+ *
+ * Im Dauer-Modus wirkt das trotzdem auf das Ergebnis, weil aus der Zielzeit
+ * eine Zieldistanz wird: "Profi", 2 Stunden ergibt eine längere Runde als
+ * "gemütlich", 2 Stunden.
+ */
+export const PACE_SPEED_KMH: Record<Profile, Record<Pace, number>> = {
+  road: { gemuetlich: 20, normal: 24, sportlich: 28, profi: 32 },
+  tour: { gemuetlich: 12, normal: 15, sportlich: 18, profi: 21 },
+};
 
 /** Kletterleistung, Höhenmeter pro Stunde — Aufschlag auf die Flachfahrzeit. */
-export const CLIMB_RATE_MH: Record<Profile, number> = { road: 600, tour: 400 };
+export const PACE_CLIMB_MH: Record<Profile, Record<Pace, number>> = {
+  road: { gemuetlich: 450, normal: 600, sportlich: 750, profi: 950 },
+  tour: { gemuetlich: 300, normal: 400, sportlich: 500, profi: 650 },
+};
+
+export const DEFAULT_PACE: Pace = "normal";
 
 export const TERRAINS = ["flach", "wellig", "huegelig", "bergig"] as const;
 export type Terrain = (typeof TERRAINS)[number];

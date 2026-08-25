@@ -24,6 +24,7 @@ function cacheKey(input: unknown): string {
     profile: i.profile,
     terrain: i.terrain,
     network: i.networkPreference,
+    pace: i.pace,
     target: i.target,
     nonce: i.nonce,
   });

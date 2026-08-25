@@ -8,8 +8,12 @@ import type { LatLon } from "@/lib/ors/schema";
 import {
   DISTANCE_RANGE_KM,
   DURATION_RANGE_MIN,
+  PACES,
+  PACE_LABEL,
+  PACE_SPEED_KMH,
   TERRAINS,
   TERRAIN_LABEL,
+  type Pace,
   type Profile,
   type Terrain,
 } from "@/lib/routing/constants";
@@ -39,6 +43,9 @@ type Props = {
   terrain: Terrain;
   onTerrainChange: (terrain: Terrain) => void;
 
+  pace: Pace;
+  onPaceChange: (pace: Pace) => void;
+
   networkPreference: NetworkPreference;
   onNetworkChange: (preference: NetworkPreference) => void;
 
@@ -63,6 +70,7 @@ const MODE_OPTIONS = [
 ] as const satisfies ReadonlyArray<{ value: TargetMode; label: string }>;
 
 const TERRAIN_TICKS = TERRAINS.map((t) => TERRAIN_LABEL[t]);
+const PACE_TICKS = PACES.map((p) => PACE_LABEL[p]);
 
 /*
  * Kurze Segment-Labels, ausführliche Erklärung darunter — in einem 340-px-Panel
@@ -107,6 +115,8 @@ export function ControlPanel(props: Props) {
     onKmChange,
     terrain,
     onTerrainChange,
+    pace,
+    onPaceChange,
     networkPreference,
     onNetworkChange,
     onGenerate,
@@ -118,6 +128,7 @@ export function ControlPanel(props: Props) {
   } = props;
 
   const terrainIndex = TERRAINS.indexOf(terrain);
+  const paceIndex = PACES.indexOf(pace);
 
   return (
     <div className="flex flex-col gap-5">
@@ -210,6 +221,22 @@ export function ControlPanel(props: Props) {
           value={terrainIndex}
           onChange={(i) => onTerrainChange(TERRAINS[i])}
           ticks={TERRAIN_TICKS}
+        />
+
+        {/*
+          Die km/h stehen bewusst dran: "Profi" allein sagt niemandem, ob das
+          jetzt 28 oder 35 sind. So kann man die Stufe gegen den eigenen
+          Schnitt abgleichen, statt zu raten.
+        */}
+        <Slider
+          label="Tempo"
+          display={`${PACE_LABEL[pace]} · ${PACE_SPEED_KMH[profile][pace]} km/h`}
+          min={0}
+          max={PACES.length - 1}
+          step={1}
+          value={paceIndex}
+          onChange={(i) => onPaceChange(PACES[i])}
+          ticks={PACE_TICKS}
         />
 
         <div className="flex flex-col gap-2">

@@ -257,3 +257,50 @@ der Button zeigt echten Fortschritt statt einer erfundenen Zahl.
 
 Der Client sortiert selbst nach Score und zeigt die besten drei; die Reihenfolge im Stream
 ist die Ankunftsreihenfolge, nicht die Rangfolge.
+
+---
+
+## Tempo-Stufen
+
+Vier Stufen (`gemuetlich` / `normal` / `sportlich` / `profi`), pro Fahrprofil eigene Werte in
+`PACE_SPEED_KMH` und `PACE_CLIMB_MH`. Voreinstellung `normal`, im Client pro Fahrprofil
+gemerkt — 24 km/h heisst beim Rennrad "normal", bei der Radtour waere es jenseits von "Profi".
+
+Die km/h stehen im UI mit dran. "Profi" allein sagt niemandem, ob das 28 oder 35 sind; so
+kann man die Stufe gegen den eigenen Schnitt abgleichen.
+
+**Die Zahlen sind eigene, keine von komoot.** komoot veroeffentlicht die km/h hinter seinen
+fuenf Fitnessleveln nicht. Das Prinzip ist aber dasselbe, komoot dazu: *"your fitness level
+will not affect the route komoot generates for you. It will only adjust the estimated time."*
+
+Genauso hier: die Stufe aendert nur `estimateDurationHours`. Im **Distanz-Modus** wirkt sie
+deshalb nur auf die angezeigte Dauer. Im **Dauer-Modus** wirkt sie sehr wohl aufs Ergebnis,
+weil aus der Zielzeit die Zieldistanz abgeleitet wird — gemessen bei Ziel 2 h, Rennrad:
+
+| Stufe | beste Runde |
+|---|---|
+| gemuetlich | 34.5 km |
+| normal | 35.0 km |
+| sportlich | 43.1 km |
+| profi | 44.9 km |
+
+---
+
+## Export nach komoot
+
+**Einen echten Direktexport gibt es nicht, und zwar prinzipiell nicht.** komoot hat keine
+offene API. Der offizielle OAuth-Beispielcode im komoot-GitHub sagt dazu: *"To use this demo
+code you need valid oauth2 credentials. You can apply for them here: komoot.de/b2b/connect"* —
+also ein B2B-Partnervertrag. Ohne den ist ein Server-zu-Server-Upload nicht moeglich.
+
+Umgesetzt sind deshalb die zwei Wege, die ueber die GPX-Datei laufen (`lib/komoot.ts`):
+
+- **Handy:** Web Share API mit der Datei (`navigator.share({ files })`). Das oeffnet den
+  System-Teilen-Dialog, in dem komoot als Ziel auftaucht. Ein Tipp — naeher kommt man ohne
+  Partnerzugang nicht.
+- **Desktop:** GPX herunterladen und `komoot.com/upload` in einem neuen Tab oeffnen. Dort
+  dann "GPS-Datei importieren".
+
+Welcher Weg genommen wurde, gibt `exportToKomoot` zurueck, damit das UI die passende
+Anweisung anzeigt statt einer allgemeinen. Abbruch im Teilen-Dialog ist kein Fehler und
+loest keinen Download aus.

@@ -1,20 +1,22 @@
-import { BASE_SPEED_KMH, CLIMB_RATE_MH, type Profile } from "./constants";
+import { PACE_CLIMB_MH, PACE_SPEED_KMH, type Pace, type Profile } from "./constants";
+
+/** Fahrprofil plus Tempo — beide zusammen bestimmen die Zeitschätzung. */
+export type Rider = { profile: Profile; pace: Pace };
 
 /**
  * Fahrzeit = Flachfahrzeit + Kletterzuschlag.
  * Bewusst simpel: die Unsicherheit steckt ohnehin im Fahrer, nicht im Modell.
  */
-export function estimateDurationHours(
-  distanceKm: number,
-  ascentM: number,
-  profile: Profile,
-): number {
-  return distanceKm / BASE_SPEED_KMH[profile] + ascentM / CLIMB_RATE_MH[profile];
+export function estimateDurationHours(distanceKm: number, ascentM: number, rider: Rider): number {
+  return (
+    distanceKm / PACE_SPEED_KMH[rider.profile][rider.pace] +
+    ascentM / PACE_CLIMB_MH[rider.profile][rider.pace]
+  );
 }
 
 /** Startschätzung für den Routing-Call, wenn der Nutzer eine Dauer vorgibt. */
-export function distanceFromDurationKm(hours: number, profile: Profile): number {
-  return hours * BASE_SPEED_KMH[profile];
+export function distanceFromDurationKm(hours: number, rider: Rider): number {
+  return hours * PACE_SPEED_KMH[rider.profile][rider.pace];
 }
 
 export function formatDuration(hours: number): string {
