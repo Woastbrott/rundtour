@@ -114,10 +114,17 @@ export function TourGenerator() {
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
 
-  const [detent, setDetent] = useState<Detent>("full");
-  const [sheetHeight, setSheetHeight] = useState(168);
+  /*
+   * Mobil startet das Sheet klein. Der erste Schritt ist "Start setzen", und der
+   * Hinweis dazu lautet "Tipp auf die Karte" — bei aufgeklapptem Sheet bleiben
+   * davon keine 150 px übrig.
+   */
+  const [detent, setDetent] = useState<Detent>("peek");
+  const [sheetHeight, setSheetHeight] = useState(176);
 
   const nonce = useRef(0);
+  /** Beim allerersten Startpunkt einmal aufklappen — dann sind die Regler dran. */
+  const hadStart = useRef(false);
   const inflight = useRef<AbortController | null>(null);
   /** Hat der Nutzer selbst eine Runde gewählt? Dann nicht mehr automatisch umschalten. */
   const pinned = useRef(false);
@@ -147,6 +154,10 @@ export function TourGenerator() {
       setLocationError(null);
       // Alte Vorschläge gehören zum alten Startpunkt.
       clearResults();
+      if (!hadStart.current) {
+        hadStart.current = true;
+        setDetent("full");
+      }
     },
     [clearResults],
   );
@@ -366,13 +377,23 @@ export function TourGenerator() {
 
       {/* Mobil: ein Sheet mit zwei Rastpunkten. */}
       {compact === true ? (
-        <BottomSheet detent={detent} onDetentChange={setDetent} onVisibleHeight={setSheetHeight}>
-          <div className="flex flex-col gap-4">
-            {results}
-            {results ? <hr className="border-separator" /> : null}
-            {controls}
-          </div>
-        </BottomSheet>
+        <>
+          <h1 className="sr-only">Rundtour</h1>
+          <BottomSheet
+            detent={detent}
+            onDetentChange={setDetent}
+            onVisibleHeight={setSheetHeight}
+            /* Eingeklappt soll man sehen, worum es gerade geht: erst das Startfeld,
+               nach der Suche die Kennzahlen der gewählten Runde. */
+            peekVisible={active ? 232 : 176}
+          >
+            <div className="flex flex-col gap-4">
+              {results}
+              {results ? <hr className="border-separator" /> : null}
+              {controls}
+            </div>
+          </BottomSheet>
+        </>
       ) : null}
     </main>
   );

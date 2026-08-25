@@ -19,20 +19,40 @@ type Props = {
   onDetentChange: (detent: Detent) => void;
   /** Sichtbare Höhe in Pixeln, gemeldet wenn die Bewegung zur Ruhe kommt. */
   onVisibleHeight?: (px: number) => void;
+  /** So viel Inhalt bleibt im Peek-Zustand stehen (ohne Safe-Area). */
+  peekVisible?: number;
   children: React.ReactNode;
 };
 
-/** So viel vom Sheet bleibt im Peek-Zustand stehen. */
+/** So viel vom Sheet bleibt im Peek-Zustand stehen, wenn nichts anderes gesagt wird. */
 const PEEK_VISIBLE = 168;
 /** Ab dieser Wischgeschwindigkeit entscheidet die Richtung, nicht die Position. */
 const FLICK_VELOCITY = 320;
+/** Bis hierhin gilt eine Zeigerbewegung noch als Tippen, nicht als Ziehen.
+ *  Großzügig gewählt: ein Daumen wackelt, ein echtes Ziehen ist deutlich mehr. */
+const TAP_SLOP = 8;
 
-export function BottomSheet({ detent, onDetentChange, onVisibleHeight, children }: Props) {
+export function BottomSheet({
+  detent,
+  onDetentChange,
+  onVisibleHeight,
+  peekVisible = PEEK_VISIBLE,
+  children,
+}: Props) {
   const sheet = useRef<HTMLDivElement>(null);
   const spring = useRef<SpringHandle | null>(null);
   const tracker = useRef(new VelocityTracker());
   const dragging = useRef(false);
   const grabOffset = useRef(0);
+  /*
+   * Nach dem Ziehen feuert der Browser zusätzlich ein click auf den Griff. Ohne
+   * diese Markierung würde der Klick-Handler den gerade erreichten Rastpunkt
+   * sofort wieder umschalten — das Sheet schnappt zurück.
+   */
+  const moved = useRef(false);
+  const startY = useRef(0);
+  /* Home-Indicator-Polsterung; zählt zur Sheet-Höhe, aber nicht zum Inhalt. */
+  const safeBottom = useRef(0);
   const [height, setHeight] = useState(0);
 
   // Die Zeigerhandler laufen außerhalb des Renders und brauchen den jeweils
@@ -44,8 +64,14 @@ export function BottomSheet({ detent, onDetentChange, onVisibleHeight, children 
     heightRef.current = height;
   });
 
+  const peekRef = useRef(peekVisible);
+  useEffect(() => {
+    peekRef.current = peekVisible;
+  });
+
   const offsetFor = useCallback(
-    (d: Detent, h: number = heightRef.current) => (d === "full" ? 0 : Math.max(h - PEEK_VISIBLE, 0)),
+    (d: Detent, h: number = heightRef.current) =>
+      d === "full" ? 0 : Math.max(h - (peekRef.current + safeBottom.current), 0),
     [],
   );
 
@@ -77,12 +103,15 @@ export function BottomSheet({ detent, onDetentChange, onVisibleHeight, children 
   useLayoutEffect(() => {
     const el = sheet.current;
     if (!el) return;
+    const measure = (px: number) => {
+      safeBottom.current = parseFloat(getComputedStyle(el).paddingBottom) || 0;
+      setHeight(px);
+    };
     const observer = new ResizeObserver(([entry]) => {
-      const next = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
-      setHeight(next);
+      measure(entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height);
     });
     observer.observe(el);
-    setHeight(el.offsetHeight);
+    measure(el.offsetHeight);
     return () => observer.disconnect();
   }, []);
 
@@ -90,9 +119,15 @@ export function BottomSheet({ detent, onDetentChange, onVisibleHeight, children 
   useEffect(() => {
     if (height <= 0 || dragging.current) return;
     const target = offsetFor(detent, height);
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    /*
+     * In einem Hintergrund-Tab läuft kein requestAnimationFrame. Ohne diese
+     * Abkürzung bliebe das Sheet auf opacity 0 stehen — auf dem Handy ist das
+     * die komplette Bedienung, die Seite wäre nur Karte.
+     */
+    const snap =
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches || document.hidden;
 
-    if (reduced) {
+    if (snap) {
       spring.current?.stop();
       paint(target);
       report();
@@ -113,9 +148,26 @@ export function BottomSheet({ detent, onDetentChange, onVisibleHeight, children 
       });
     }
     report();
-  }, [detent, height, offsetFor, paint, report]);
+  }, [detent, height, peekVisible, offsetFor, paint, report]);
 
   useEffect(() => () => spring.current?.stop(), []);
+
+  /*
+   * Wer im eingeklappten Sheet in ein Feld tippt, will damit arbeiten — und die
+   * Bildschirmtastatur nimmt gleich die Hälfte des Platzes. Also aufklappen,
+   * sonst steht die Vorschlagsliste halb außerhalb des Bildschirms.
+   */
+  useEffect(() => {
+    const el = sheet.current;
+    if (!el) return;
+    const onFocusIn = (e: FocusEvent) => {
+      if (detentRef.current !== "peek") return;
+      const target = e.target as HTMLElement | null;
+      if (target?.matches("input, textarea, select")) onDetentChange("full");
+    };
+    el.addEventListener("focusin", onFocusIn);
+    return () => el.removeEventListener("focusin", onFocusIn);
+  }, [onDetentChange]);
 
   /* --- Geste ------------------------------------------------------- */
   const onPointerDown = (e: React.PointerEvent) => {
@@ -123,6 +175,8 @@ export function BottomSheet({ detent, onDetentChange, onVisibleHeight, children 
     const current = spring.current?.value ?? offsetFor(detentRef.current);
 
     dragging.current = true;
+    moved.current = false;
+    startY.current = e.clientY;
     // Vom Ist-Wert aus greifen, nicht vom Zielwert — sonst springt es beim Zupacken.
     grabOffset.current = e.clientY - current;
     tracker.current.clear();
@@ -134,6 +188,8 @@ export function BottomSheet({ detent, onDetentChange, onVisibleHeight, children 
   const onPointerMove = (e: React.PointerEvent) => {
     if (!dragging.current) return;
     tracker.current.add(e.clientY);
+
+    if (Math.abs(e.clientY - startY.current) > TAP_SLOP) moved.current = true;
 
     const raw = e.clientY - grabOffset.current;
     const max = offsetFor("peek");
@@ -204,11 +260,16 @@ export function BottomSheet({ detent, onDetentChange, onVisibleHeight, children 
     <div
       ref={sheet}
       className="material fixed inset-x-0 bottom-0 z-20 flex max-h-[82svh] flex-col rounded-t-[20px] rounded-b-none border-b-0 will-change-transform"
-      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      style={{
+        paddingBottom: "env(safe-area-inset-bottom)",
+        // Querformat auf Geräten mit Notch: sonst liegt der Inhalt darunter.
+        paddingLeft: "env(safe-area-inset-left)",
+        paddingRight: "env(safe-area-inset-right)",
+      }}
     >
       {/* Grabber: die Geste lebt hier, damit die Slider im Inhalt nicht damit kämpfen. */}
       <div
-        className="shrink-0 cursor-grab touch-none pt-2.5 pb-1 active:cursor-grabbing"
+        className="shrink-0 cursor-grab touch-none pt-2 pb-1 select-none active:cursor-grabbing"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={finish}
@@ -218,14 +279,23 @@ export function BottomSheet({ detent, onDetentChange, onVisibleHeight, children 
           type="button"
           aria-label={detent === "full" ? "Panel einklappen" : "Panel ausklappen"}
           aria-expanded={detent === "full"}
-          onClick={() => onDetentChange(detent === "full" ? "peek" : "full")}
-          className="mx-auto block h-6 w-full"
+          onClick={() => {
+            // Nach einer Ziehbewegung hat `finish` den Rastpunkt schon gesetzt.
+            if (moved.current) {
+              moved.current = false;
+              return;
+            }
+            onDetentChange(detent === "full" ? "peek" : "full");
+          }}
+          className="mx-auto grid h-9 w-full place-items-center"
         >
-          <span className="mx-auto block h-[5px] w-9 rounded-full bg-ink-secondary/40" />
+          <span className="block h-[5px] w-9 rounded-full bg-ink-secondary/40" />
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-1 pb-5">
+      {/* overflow-x-clip: die Aktionsleiste zieht ihren Hintergrund über die
+          Polsterung hinaus; ohne das ließe sich das Sheet 20 px seitlich schieben. */}
+      <div className="min-h-0 flex-1 overflow-x-clip overflow-y-auto overscroll-contain px-5 pt-1 pb-5">
         {children}
       </div>
     </div>

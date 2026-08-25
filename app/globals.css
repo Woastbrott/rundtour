@@ -70,12 +70,50 @@ body {
   height: 100%;
 }
 
+/*
+ * Auf dem Handy ist 100 % die *große* Viewport-Höhe, Adressleiste eingerechnet —
+ * die Karte reichte damit unter die Browser-Chrome und das Sheet saß zu tief.
+ * dvh misst das, was gerade sichtbar ist. Die Seite scrollt nicht, also bleibt
+ * der Wert stabil und die Karte muss sich nicht dauernd neu vermessen.
+ */
+@supports (height: 100dvh) {
+  html,
+  body {
+    height: 100dvh;
+  }
+}
+
 body {
   background: var(--surface);
   color: var(--ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
+  /* Ohne das blitzt auf Android/iOS bei jedem Tap ein graues Rechteck über die
+     eigenen active:-Zustände. */
+  -webkit-tap-highlight-color: transparent;
+  /* iOS bläht Text beim Drehen ins Querformat sonst eigenmächtig auf. */
+  text-size-adjust: 100%;
+}
+
+/* Kein Warten auf einen möglichen Doppeltipp, bevor der Tap ankommt. */
+button,
+a,
+[role="tab"],
+[role="radio"] {
+  touch-action: manipulation;
+}
+
+/*
+ * iOS Safari zoomt beim Fokus in jedes Eingabefeld unter 16 px hinein — und
+ * zoomt danach nicht von selbst zurück. Die Karte steht dann schief im Bild.
+ */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em);
+  }
 }
 
 /* Tracking ist größenabhängig — ein fester Wert wäre irgendwo immer falsch. */
@@ -86,7 +124,8 @@ body {
   font-weight: 600;
 }
 .t-metric {
-  font-size: 1.5rem;
+  /* Vier Kennzahlen nebeneinander: bei 375 px Breite passen 24 px nicht mehr. */
+  font-size: clamp(1.125rem, 5.2vw, 1.5rem);
   line-height: 1.1;
   letter-spacing: -0.018em;
   font-weight: 600;
@@ -202,6 +241,50 @@ body {
   transform: scale(1.12);
 }
 
+/* Mit dem Finger trifft man 28 px Höhe schlecht — am Daumen darf es mehr sein. */
+@media (pointer: coarse) {
+  .slider {
+    height: 36px;
+  }
+  .slider::-webkit-slider-thumb {
+    width: 28px;
+    height: 28px;
+    margin-top: -12px;
+  }
+  .slider::-moz-range-thumb {
+    width: 28px;
+    height: 28px;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Aktionsleiste, die im Sheet unten klebt.
+ *
+ * Der Inhalt des Sheets ist länger als das Sheet — ohne das hier stand der
+ * wichtigste Knopf ("Touren generieren") unterhalb der Faltkante und man musste
+ * erst scrollen, um überhaupt etwas auslösen zu können.
+ * ------------------------------------------------------------------ */
+@media (max-width: 767px) {
+  .action-dock {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    /* Deckt die Polsterung des Scrollcontainers mit ab (px-5 / pb-5). */
+    margin: 0 -20px -20px;
+    padding: 12px 20px 20px;
+    background: color-mix(in srgb, var(--surface) 76%, transparent);
+    backdrop-filter: blur(16px) saturate(180%);
+    border-top: 0.5px solid var(--separator);
+  }
+
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .action-dock {
+      background: var(--surface);
+      backdrop-filter: none;
+    }
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * Motion. Alles hier ist unterbrechbar oder unkritisch —
  * die Gesten-Physik steckt in lib/spring.ts, nicht in CSS.
@@ -255,6 +338,19 @@ body {
 }
 .maplibregl-canvas:focus {
   outline: none;
+}
+
+/*
+ * viewportFit: "cover" heißt, die Karte reicht bis unter Notch und Home-Indicator.
+ * Das ist für die Karte selbst gewollt — die Bedienelemente dürfen dort aber nicht
+ * liegen, sonst sind sie im Querformat halb unter der Aussparung.
+ */
+.maplibregl-ctrl-top-right {
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+}
+.maplibregl-ctrl-bottom-right {
+  padding-right: env(safe-area-inset-right);
 }
 
 /* ------------------------------------------------------------------ *

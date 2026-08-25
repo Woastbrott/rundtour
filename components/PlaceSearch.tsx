@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import type { GeocodeHit, LatLon } from "@/lib/ors/schema";
 
@@ -10,6 +10,30 @@ type Props = {
   focus?: LatLon | null;
 };
 
+/** Höhe der Liste, wenn sie voll aufgeklappt ist (max-h-64). */
+const LIST_MAX_H = 256;
+
+/**
+ * Der Kasten, der die Liste abschneiden würde. Das ist der nächste
+ * Scrollcontainer — und in jedem Fall der Bildschirm: das Sheet ragt im
+ * eingeklappten Zustand unten aus dem Fenster heraus, sein Kasten allein sagt
+ * also nichts darüber, wo noch etwas zu sehen ist.
+ */
+function clipBounds(node: HTMLElement): { top: number; bottom: number } {
+  let top = 0;
+  let bottom = window.innerHeight;
+  for (let el = node.parentElement; el; el = el.parentElement) {
+    const overflow = getComputedStyle(el).overflowY;
+    if (overflow === "auto" || overflow === "scroll" || overflow === "hidden") {
+      const rect = el.getBoundingClientRect();
+      top = Math.max(top, rect.top);
+      bottom = Math.min(bottom, rect.bottom);
+      break;
+    }
+  }
+  return { top, bottom };
+}
+
 export function PlaceSearch({ onPick, focus }: Props) {
   const listId = useId();
   const [text, setText] = useState("");
@@ -17,6 +41,8 @@ export function PlaceSearch({ onPick, focus }: Props) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const [error, setError] = useState<string | null>(null);
+  /* Im Bottom-Sheet ist unter dem Feld oft kein Platz — dann klappt die Liste hoch. */
+  const [dropUp, setDropUp] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
   /*
    * Beim Auswählen wandert das Label ins Eingabefeld. Ohne diese Sperre würde das
@@ -30,7 +56,12 @@ export function PlaceSearch({ onPick, focus }: Props) {
 
     // Getippt wird schnell, das Geocoding-Kontingent ist klein — 280 ms Ruhe vor jedem Call.
     const timer = window.setTimeout(async () => {
-      if (query === chosen.current) return;
+      // Nur den einen Lauf schlucken, den das Übernehmen des Labels ausgelöst hat.
+      // Sonst bliebe derselbe Ort für immer unsuchbar.
+      if (query === chosen.current) {
+        chosen.current = null;
+        return;
+      }
       if (query.length < 2) {
         setHits([]);
         setError(null);
@@ -75,6 +106,21 @@ export function PlaceSearch({ onPick, focus }: Props) {
       window.clearTimeout(timer);
     };
   }, [text, focus]);
+
+  /*
+   * Vor dem Zeichnen entscheiden, in welche Richtung die Liste aufgeht: im Sheet
+   * schneidet der Scrollcontainer sie sonst ab und die Treffer sind unsichtbar.
+   */
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!open || hits.length === 0 || !box) return;
+    const rect = box.getBoundingClientRect();
+    const bounds = clipBounds(box);
+    const needed = Math.min(hits.length * 40 + 8, LIST_MAX_H);
+    const below = bounds.bottom - rect.bottom;
+    const above = rect.top - bounds.top;
+    setDropUp(below < needed && above > below);
+  }, [open, hits]);
 
   useEffect(() => {
     const onDocumentDown = (e: PointerEvent) => {
@@ -133,7 +179,9 @@ export function PlaceSearch({ onPick, focus }: Props) {
         <ul
           id={listId}
           role="listbox"
-          className="material animate-panel-in absolute top-[calc(100%+6px)] left-0 z-30 max-h-64 w-full overflow-y-auto rounded-[14px] p-1"
+          className={`material animate-panel-in absolute left-0 z-30 max-h-64 w-full overflow-y-auto overscroll-contain rounded-[14px] p-1 ${
+            dropUp ? "bottom-[calc(100%+6px)]" : "top-[calc(100%+6px)]"
+          }`}
         >
           {hits.map((hit, i) => (
             <li key={`${hit.label}-${hit.lat}-${hit.lon}`}>
@@ -146,7 +194,7 @@ export function PlaceSearch({ onPick, focus }: Props) {
                   choose(hit);
                 }}
                 onMouseEnter={() => setActive(i)}
-                className={`w-full truncate rounded-[10px] px-2.5 py-2 text-left text-[14px] tracking-[-0.01em] transition-colors duration-150 ${
+                className={`w-full truncate rounded-[10px] px-2.5 py-2.5 text-left text-[14px] tracking-[-0.01em] transition-colors duration-150 md:py-2 ${
                   i === active ? "bg-accent text-accent-ink" : "text-ink"
                 }`}
               >

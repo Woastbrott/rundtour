@@ -142,7 +142,7 @@ export function ControlPanel(props: Props) {
             type="button"
             onClick={onLocate}
             disabled={locating}
-            className="flex items-center gap-1.5 rounded-[9px] px-2 py-1 text-[13px] font-medium text-accent transition-opacity duration-150 active:opacity-55 disabled:opacity-40"
+            className="-ml-2 flex min-h-11 shrink-0 items-center gap-1.5 rounded-[9px] px-2 py-1 text-[13px] font-medium text-accent transition-opacity duration-150 active:opacity-55 disabled:opacity-40"
           >
             <svg viewBox="0 0 16 16" aria-hidden className="size-3.5 fill-current">
               <path d="M8 0a.6.6 0 0 1 .6.6v1.44a6 6 0 0 1 5.36 5.36h1.44a.6.6 0 0 1 0 1.2h-1.44a6 6 0 0 1-5.36 5.36v1.44a.6.6 0 0 1-1.2 0v-1.44A6 6 0 0 1 2.04 8.6H.6a.6.6 0 0 1 0-1.2h1.44A6 6 0 0 1 7.4 2.04V.6A.6.6 0 0 1 8 0Zm0 3.2a4.8 4.8 0 1 0 0 9.6 4.8 4.8 0 0 0 0-9.6Zm0 2.6a2.2 2.2 0 1 1 0 4.4 2.2 2.2 0 0 1 0-4.4Z" />
@@ -256,13 +256,17 @@ export function ControlPanel(props: Props) {
         </div>
       </section>
 
-      {/* Aktion --------------------------------------------------------- */}
-      <section className="flex flex-col gap-2">
+      {/*
+        Aktion ----------------------------------------------------------
+        `action-dock` klebt auf dem Handy am unteren Rand des Sheets: der Inhalt
+        ist dort länger als das Sheet, ohne das stand der Auslöser unter der
+        Faltkante. Auf dem Desktop ist die Klasse wirkungslos.
+      */}
+      <section className="action-dock flex flex-col gap-2">
         <button
           type="button"
           onClick={onGenerate}
           disabled={!start || loading}
-          aria-live="polite"
           className="relative w-full overflow-hidden rounded-[13px] bg-accent px-4 py-3 text-[16px] font-semibold tracking-[-0.01em] text-accent-ink transition-[transform,opacity] duration-150 ease-ios active:scale-[0.985] active:opacity-90 disabled:pointer-events-none disabled:opacity-60"
         >
           {/*
@@ -287,6 +291,15 @@ export function ControlPanel(props: Props) {
                 : "Touren generieren"}
           </span>
         </button>
+
+        {/*
+          Der Fortschritt gehört nicht als aria-live an den Knopf selbst: der ist
+          während der Suche disabled, und jede der acht Zwischenmeldungen würde
+          vorgelesen. Eine eigene Statuszeile meldet nur Anfang und Ende.
+        */}
+        <span role="status" className="sr-only">
+          {loading ? "Runden werden gesucht." : hasResults ? "Runden gefunden." : ""}
+        </span>
 
         {error ? (
           <p role="alert" className="t-body text-route">

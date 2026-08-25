@@ -33,6 +33,23 @@ function emptyLine(): GeoJSON.Feature<GeoJSON.LineString> {
 }
 
 /**
+ * Padding, das zusammen größer ist als die Karte, ergibt bei fitBounds keinen
+ * sinnvollen Ausschnitt mehr. Auf dem Handy im Querformat ist das schnell
+ * erreicht: 400 px Sheet unter einer 375 px hohen Karte.
+ */
+function clampPadding(instance: MlMap, p: MapPadding): MapPadding {
+  const el = instance.getContainer();
+  const scaleY = Math.min(1, (el.clientHeight * 0.8) / Math.max(p.top + p.bottom, 1));
+  const scaleX = Math.min(1, (el.clientWidth * 0.8) / Math.max(p.left + p.right, 1));
+  return {
+    top: p.top * scaleY,
+    bottom: p.bottom * scaleY,
+    left: p.left * scaleX,
+    right: p.right * scaleX,
+  };
+}
+
+/**
  * Weißes Dreieck als Fahrtrichtungspfeil. Als Bild statt als Text-Glyphe, damit
  * wir nicht davon abhängen, welche Zeichen der Basemap-Style ausliefert.
  */
@@ -74,6 +91,12 @@ export function RouteMap({ start, onStartChange, route, hoverPoint, padding }: P
   const hoverMarker = useRef<maplibregl.Marker | null>(null);
   const drawFrame = useRef(0);
   const appliedPadding = useRef<string | null>(null);
+  /*
+   * Ein Style-Wechsel (Hell/Dunkel) wirft alle eigenen Quellen und Layer weg.
+   * Ohne diese Kopie käme die Quelle leer zurück und die gezeichnete Route wäre
+   * beim Umschalten des Systemdesigns verschwunden.
+   */
+  const lineData = useRef<GeoJSON.Feature<GeoJSON.LineString>>(emptyLine());
 
   // Callback und Padding über Refs, damit die Karte nicht bei jedem Render neu gebaut wird.
   // Zuweisung im Effekt, nicht im Render — und als erster Effekt, damit die
@@ -115,7 +138,7 @@ export function RouteMap({ start, onStartChange, route, hoverPoint, padding }: P
           type: "geojson",
           // lineMetrics ist Voraussetzung für line-gradient — und damit für das Einzeichnen.
           lineMetrics: true,
-          data: emptyLine(),
+          data: lineData.current,
         });
       }
       if (!instance.hasImage(IMG_ARROW)) {
@@ -217,15 +240,17 @@ export function RouteMap({ start, onStartChange, route, hoverPoint, padding }: P
     if (!source) return;
 
     if (!route) {
-      source.setData(emptyLine());
+      lineData.current = emptyLine();
+      source.setData(lineData.current);
       return;
     }
 
-    source.setData({
+    lineData.current = {
       type: "Feature",
       properties: {},
       geometry: { type: "LineString", coordinates: route.coordinates },
-    });
+    };
+    source.setData(lineData.current);
 
     const bounds: LngLatBoundsLike = [
       [route.bbox[0], route.bbox[1]],
@@ -234,7 +259,7 @@ export function RouteMap({ start, onStartChange, route, hoverPoint, padding }: P
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     instance.fitBounds(bounds, {
-      padding: paddingRef.current,
+      padding: clampPadding(instance, paddingRef.current),
       duration: reduced ? 0 : 900,
       easing: (t) => 1 - Math.pow(1 - t, 3),
       maxZoom: 15,
@@ -324,7 +349,7 @@ export function RouteMap({ start, onStartChange, route, hoverPoint, padding }: P
           [route.bbox[0], route.bbox[1]],
           [route.bbox[2], route.bbox[3]],
         ],
-        { padding, duration: 400, maxZoom: 15 },
+        { padding: clampPadding(instance, padding), duration: 400, maxZoom: 15 },
       );
     }, 60);
     return () => window.clearTimeout(id);

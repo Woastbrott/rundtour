@@ -46,7 +46,12 @@ export function Segmented<T extends string>({ options, value, onChange, label }:
             role="radio"
             aria-checked={active}
             onClick={() => onChange(option.value)}
-            className={`flex-1 rounded-[8px] px-3 py-[7px] text-[13px] font-medium tracking-[-0.01em] transition-colors duration-200 ${
+            /*
+             * min-w-0 + truncate: "Nur Radnetz" ist bei drei Segmenten auf einem
+             * 360-px-Display breiter als sein Drittel und schob den Regler sonst
+             * über den Rand.
+             */
+            className={`min-w-0 flex-1 truncate rounded-[8px] px-2 py-[9px] text-[13px] font-medium tracking-[-0.01em] transition-colors duration-200 md:px-3 md:py-[7px] ${
               active ? "text-ink" : "text-ink-secondary hover:text-ink"
             }`}
           >

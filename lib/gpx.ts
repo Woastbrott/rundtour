@@ -50,5 +50,10 @@ export function downloadGpx(candidate: RouteCandidate, name: string): void {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  /*
+   * Nicht sofort freigeben: Safari (auch auf dem iPhone) liest den Blob erst
+   * nach dem aktuellen Task aus. Ein synchrones revoke bricht den Download dort
+   * ab — die Datei kommt einfach nie an.
+   */
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }

@@ -23,6 +23,13 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  /*
+   * Ohne das schiebt die Bildschirmtastatur auf Android nur den sichtbaren
+   * Ausschnitt hoch und lässt das Layout stehen — das Sheet klebt dann samt
+   * Suchfeld hinter der Tastatur. "resizes-content" verkleinert stattdessen
+   * das Layout, damit das Feld über der Tastatur bleibt.
+   */
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
