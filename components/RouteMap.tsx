@@ -332,5 +332,12 @@ export function RouteMap({ start, onStartChange, route, hoverPoint, padding }: P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [padding.top, padding.right, padding.bottom, padding.left]);
 
-  return <div ref={container} className="absolute inset-0" aria-label="Karte" />;
+  /*
+   * h-full statt absolute+inset-0: MapLibre hängt dem Container die Klasse
+   * .maplibregl-map an, und deren CSS setzt `position: relative`. Das überschreibt
+   * ein `absolute` aus den Utilities, damit greift inset-0 nicht mehr und der
+   * Container fällt auf Höhe 0 zusammen — Karte unsichtbar, Seite schwarz.
+   * Eine feste Höhe ist unabhängig davon, welche `position` gewinnt.
+   */
+  return <div ref={container} className="h-full w-full" aria-label="Karte" />;
 }
