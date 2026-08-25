@@ -21,12 +21,21 @@ Die drei Stufen entstehen aus zwei Variablen in BRouters `trekking.brf`:
 | Stufe | `ignore_cycleroutes` | `stick_to_cycleroutes` | Profil |
 |---|---|---|---|
 | `ignore` | `true` | `false` | Upload |
-| `prefer` | `false` | `false` | Standardprofil `trekking` |
+| `prefer` | `false` | `false` | Upload |
 | `only` | `false` | `true` | Upload |
 
-`prefer` ist exakt der Auslieferungszustand von `trekking.brf` und braucht deshalb keinen
-Upload. Beim Rennrad-Profil ist der Regler ausgeblendet und der Wert serverseitig auf
-`ignore` gezwungen — dort läuft das Standardprofil `fastbike`.
+Der Regler gilt für **beide** Fahrprofile. `fastbike.brf` bringt die zwei Variablen im
+Original nicht mit — sie sind in `profiles/fastbike-base.brf` ergänzt, zusammen mit der
+passenden Erweiterung der Kostenkette (`is_ldcr`), 1:1 nach dem Muster aus `trekking.brf`.
+
+Voreinstellung je Profil, im Client gemerkt: **Rennrad `ignore`**, **Radtour `prefer`**.
+Beim Rennrad will man das Radnetz normalerweise nicht, weil es streckenweise über
+unbefestigte Abschnitte führt; der Hilfetext sagt das auch, sobald dort etwas anderes als
+`ignore` gewählt ist. Umschalten zwischen den Profilen behält die jeweils eigene Wahl.
+
+Es gibt keine Abkürzung über Standardprofile: unsere Vorlagen weichen auch abseits des
+Reglers vom Original ab (siehe unten), also werden alle sechs Kombinationen hochgeladen und
+im Speicher gehalten.
 
 ### Warum Upload und nicht Query-Parameter
 
@@ -48,10 +57,12 @@ Wegpunkten).
 War als Rückfallebene gedacht, falls nur `trekking`s eingebauter Schalter zur Verfügung
 steht. Da (B) funktioniert, gibt es drei echte Stufen.
 
-Abweichung vom Auftrag an einer Stelle: statt drei fertiger `.brf`-Dateien liegt **eine**
-Vorlage im Repo (`profiles/trekking-base.brf`, unveränderte Kopie des Originals mit zwei
-Platzhaltern). Die Varianten entstehen zur Laufzeit. Grund: drei fast identische
-438-Zeilen-Dateien wären beim nächsten Upstream-Update dreimal zu pflegen.
+Abweichung vom Auftrag an einer Stelle: statt fertiger `.brf`-Dateien pro Stufe liegen
+**zwei Vorlagen** im Repo — `profiles/trekking-base.brf` und `profiles/fastbike-base.brf`,
+je eine Kopie des Originals mit Platzhaltern. Die sechs Varianten entstehen zur Laufzeit.
+Grund: sechs fast identische 400-Zeilen-Dateien wären beim nächsten Upstream-Update sechsmal
+zu pflegen. Jede Abweichung vom Original ist in den Dateien mit „von Rundtour ergaenzt"
+markiert und im Kopf aufgeführt.
 
 Die Profil-IDs liegen ebenfalls nicht in der Env, sondern werden bei Bedarf hochgeladen und
 im Speicher gehalten (`lib/brouter/profiles.ts`). Sie sehen nach Zeitstempeln aus und es gibt
@@ -95,17 +106,71 @@ Startwert; gemessen ergab das die **2,2-fache** Zieldistanz. Der Denkfehler: der
 im Zentrum des Rings, der Weg ist also einmal Radius raus, vier Sehnen, einmal Radius zurück
 — geometrisch rund 6.7·r statt 2π·r.
 
-Messung über Radolfzell:
+Der Faktor musste nach dem Einbau der Umweg-Korrektur (siehe unten) noch einmal deutlich
+hoch, weil die Korrektur Strecke wegschneidet — und zwar nichtlinear: bei kleinem Ring
+landen mehr Wegpunkte im Nirgendwo, und mehr wird getrimmt.
+
+Messung über Radolfzell, beide Profile, Ziele 30–80 km:
 
 | Faktor | Ist/Soll |
 |---|---|
-| 0.42 | 0.73 |
-| 0.52 | 0.90 |
-| 0.62 | 1.02 … 1.09 |
+| 0.58 | 0.61 |
+| 0.66 | 1.06 |
+| **0.72** | **1.01 … 1.03** |
+| 0.80 | 1.18 … 1.29 |
 
-Gewählt: **0.58**. In einer anderen Gegend nachmessen — Seen und Berge verschieben das
+Gewählt: **0.72**. In einer anderen Gegend nachmessen — Seen und Berge verschieben das
 deutlich.
 
+**`LOOP_POINTS = 5` ist ebenfalls gemessen, nicht geraten.** Die naheliegende Annahme, mehr
+Ringpunkte würden die Runde runder machen, stimmt nicht — sie machen es messbar schlechter,
+weil jeder zusätzliche Punkt eine weitere Chance ist, abseits des Wegenetzes zu landen und
+eine Stichfahrt zu erzwingen:
+
+| Ringpunkte | doppelt befahren Ø | max | Ist/Soll |
+|---|---|---|---|
+| **5** | **2.6 %** | 6.5 % | 0.97 |
+| 7 | 4.6 % | 13.4 % | 1.16 |
+| 9 | 7.8 % | 13.9 % | 1.44 |
+
+---
+
+## Keine Faehren, keine Stichfahrten
+
+Zwei Aenderungen an beiden Profil-Vorlagen, beide gemessen statt vermutet.
+
+### `allow_ferries = false`
+
+Runden fuehrten quer ueber den Bodensee. Nachgewiesen ueber die `messages` der
+GeoJSON-Antwort, die die Way-Tags jedes Segments mitliefert: bei 6 Testrunden enthielten
+**3** Faehrsegmente, eine davon **4,7 km ueber Wasser** (`foot=yes bicycle=yes route=ferry`).
+
+Wichtig ist dabei die Reihenfolge in der Kostenkette. In `trekking.brf` steht die
+Faehrenpruefung vor der Radrouten-Regel; in `fastbike.brf` musste sie beim Einbau von
+`is_ldcr` bewusst davor gesetzt werden. Andernfalls bekaeme eine Faehre, die Teil einer
+Radroute ist — am Bodensee die Regel, nicht die Ausnahme — ueber `is_ldcr` Kosten 1.0 und
+wuerde `allow_ferries` schlicht umgehen.
+
+### `correctMisplacedViaPoints = true`, `...Distance = 0`
+
+Unsere Ringpunkte liegen per Konstruktion an zufaelligen Stellen, oft abseits jeder Strasse.
+BRouter routet dann zum naechsten erreichbaren Punkt und denselben Weg wieder zurueck — das
+ist das "faehrt in eine Strasse rein und dreht einfach um".
+
+Als Kennzahl: Anteil der Strecke, der in beiden Richtungen befahren wird.
+
+| Einstellung | doppelt befahren Ø |
+|---|---|
+| Original (Korrektur aus) | 24.7 % |
+| Korrektur an, Distance 400 (Default) | 24.7 % |
+| **Korrektur an, Distance 0 (unbegrenzt)** | **3.9 %** |
+
+Der Default-Wert 400 m bringt nichts, weil unsere Stichfahrten deutlich laenger sind. Erst
+`0` — laut Doku "removes detours whatever their length" — greift.
+
+Preis: die Korrektur schneidet Strecke weg, die Runden wurden rund 35 % kuerzer. Deshalb der
+neu gemessene `LOOP_RADIUS_FACTOR`. Ueber die App gemessen liegt der Anteil jetzt bei 0.5 bis
+8.5 % je nach Kombination, im Mittel rund 5 %.
 ---
 
 ## Höhenmeter: die Skala hat sich verschoben
@@ -135,18 +200,19 @@ Kurze Runden bleiben im flachen Seebecken, lange greifen in den Hegau aus. Eine 
 wird um Radolfzell nie „bergig", egal was der Regler sagt.
 
 
-### Offen: die Tabelle gilt nur fuer das Radtour-Profil
+### Zur Tabelle und den zwei Fahrprofilen
 
-Ausgemessen wurde ausschliesslich mit `trekking`. Das Rennrad-Profil `fastbike` liegt
-systematisch hoeher, weil es Strassen ueber die Huegel nimmt statt flacher Radwege:
-gemessen 7.0 hm/km bei einer 60-km-Runde, wo `trekking` rund 3 hm/km liefert.
+Ursprünglich wurde nur mit `trekking` ausgemessen, und `fastbike` lag deutlich höher —
+gemessen 7.0 gegen rund 3.0 hm/km. Damit war die Höhenstufe beim Rennrad verschoben.
 
-Folge: bei "Rennrad" ist die Hoehenstufe verschoben — "wellig" trifft eher das, was die
-Tabelle als "bergig" fuehrt. Distanz und Dauer stimmen weiterhin.
+Seit `fastbike-base.brf` dieselbe Radrouten-Logik hat, ist die Lücke weitgehend zu:
+gemessen 3.6 (Rennrad) gegen 4.7 hm/km (Radtour) bei identischen Zielen, und über die App
+überlappen die Bereiche (Rennrad 3.0–7.1, Radtour 3.7–10.6). Eine gemeinsame Tabelle ist
+damit vertretbar.
 
-Sauber waere eine Tabelle pro Fahrprofil (`Record<Profile, Record<Terrain, number>>`).
-Bewusst nicht nebenbei geaendert, weil der Auftrag Scoring-nahe Werte ausdruecklich
-ausgenommen hat.
+Ganz sauber wäre trotzdem eine Tabelle pro Fahrprofil
+(`Record<Profile, Record<Terrain, number>>`). Offen gelassen, weil der Rest-Unterschied
+kleiner ist als die Streuung zwischen einzelnen Runden.
 
 ### Nebenwirkung auf den ORS-Fallback
 

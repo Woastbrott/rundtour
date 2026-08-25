@@ -70,7 +70,23 @@ export function TourGenerator() {
   const [minutes, setMinutes] = useState(120);
   const [km, setKm] = useState(45);
   const [terrain, setTerrain] = useState<Terrain>("wellig");
-  const [networkPreference, setNetworkPreference] = useState<NetworkPreference>("prefer");
+
+  /*
+   * Der Netz-Regler wird pro Fahrprofil gemerkt. Grund: die sinnvolle
+   * Voreinstellung unterscheidet sich — beim Rennrad will man das Radnetz
+   * normalerweise nicht (unbefestigte Abschnitte), bei der Radtour schon.
+   * Umschalten zwischen den Profilen soll die jeweils eigene Wahl wiederfinden,
+   * statt sie zu überschreiben.
+   */
+  const [networkByProfile, setNetworkByProfile] = useState<Record<Profile, NetworkPreference>>({
+    road: "ignore",
+    tour: "prefer",
+  });
+  const networkPreference = networkByProfile[profile];
+  const setNetworkPreference = useCallback(
+    (value: NetworkPreference) => setNetworkByProfile((prev) => ({ ...prev, [profile]: value })),
+    [profile],
+  );
 
   const [candidates, setCandidates] = useState<RouteCandidate[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -146,9 +162,7 @@ export function TourGenerator() {
             start,
             profile,
             terrain,
-            // Beim Rennrad ist der Regler ausgeblendet — dann zählt er auch nicht.
-            // Der Server erzwingt dasselbe nochmal.
-            networkPreference: profile === "road" ? "ignore" : network,
+            networkPreference: network,
             target: mode === "duration" ? { mode, minutes } : { mode, km },
             nonce: nonce.current,
           }),
@@ -207,7 +221,7 @@ export function TourGenerator() {
     if (!suggestion) return;
     setNetworkPreference(suggestion.value);
     void generate({ networkPreference: suggestion.value });
-  }, [suggestion, generate]);
+  }, [suggestion, generate, setNetworkPreference]);
 
   const locate = useCallback(() => {
     if (!("geolocation" in navigator)) {

@@ -82,6 +82,13 @@ const NETWORK_HELP: Record<NetworkPreference, string> = {
   only: "Bleibt möglichst auf dem beschilderten Radnetz — kann längere Umwege bedeuten.",
 };
 
+/**
+ * Zusatz nur fürs Rennrad: das Radnetz führt streckenweise über Wege, die man
+ * mit schmalen Reifen nicht fahren will. Das gehört gesagt, statt es dem Nutzer
+ * unterwegs zu überlassen.
+ */
+const NETWORK_ROAD_CAVEAT = "Achtung: Das Radnetz führt teils über unbefestigte Abschnitte.";
+
 export function ControlPanel(props: Props) {
   const {
     start,
@@ -205,24 +212,21 @@ export function ControlPanel(props: Props) {
           ticks={TERRAIN_TICKS}
         />
 
-        {/*
-          Nur beim gemütlichen Profil: das Radnetz führt über Radwege und teils
-          unbefestigte Abschnitte, was dem Rennrad-Profil direkt widerspricht.
-        */}
-        {profile === "tour" ? (
-          <div className="flex flex-col gap-2">
-            <h2 className="t-label">Beschilderte Radwege</h2>
-            <Segmented
-              label="Wie stark den Radwegweisern folgen"
-              options={NETWORK_OPTIONS}
-              value={networkPreference}
-              onChange={onNetworkChange}
-            />
-            <p className="text-[12px] leading-snug text-ink-secondary">
-              {NETWORK_HELP[networkPreference]}
-            </p>
-          </div>
-        ) : null}
+        <div className="flex flex-col gap-2">
+          <h2 className="t-label">Beschilderte Radwege</h2>
+          <Segmented
+            label="Wie stark den Radwegweisern folgen"
+            options={NETWORK_OPTIONS}
+            value={networkPreference}
+            onChange={onNetworkChange}
+          />
+          <p className="text-[12px] leading-snug text-ink-secondary">
+            {NETWORK_HELP[networkPreference]}
+            {profile === "road" && networkPreference !== "ignore" ? (
+              <span className="mt-1 block">{NETWORK_ROAD_CAVEAT}</span>
+            ) : null}
+          </p>
+        </div>
       </section>
 
       {/* Aktion --------------------------------------------------------- */}

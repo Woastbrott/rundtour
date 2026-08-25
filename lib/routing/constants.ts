@@ -98,11 +98,16 @@ export const LOOP_POINTS = 5;
  * geometrisch rund 6.7·r statt 2π·r. Zusammen mit realen Straßenumwegen kam
  * mit dem Startwert 1.15 die 2.2-fache Zieldistanz heraus.
  *
- * Gemessen am 24.08.2026 über Radolfzell: Faktor 0.42 -> Ist/Soll 0.73,
- * 0.52 -> 0.90, 0.62 -> 1.02…1.09. Daraus 0.58 als Mitte.
+ * Seit die Profile Umwege an den Wegpunkten entfernen (correctMisplacedViaPoints),
+ * musste der Faktor deutlich hoch: die Korrektur schneidet Strecke weg, und zwar
+ * nichtlinear — bei kleinem Ring landen mehr Punkte im Nirgendwo und mehr wird
+ * getrimmt.
+ *
+ * Gemessen am 25.08.2026 über Radolfzell, beide Profile, Ziele 30–80 km:
+ * 0.58 -> 0.61, 0.66 -> 1.06, 0.72 -> 1.01…1.03, 0.80 -> 1.18…1.29.
  * In einer anderen Gegend nachmessen — Seen und Berge verschieben das.
  */
-export const LOOP_RADIUS_FACTOR = 0.58;
+export const LOOP_RADIUS_FACTOR = 0.72;
 
 /** Radius-Jitter je Punkt: Faktor zwischen MIN und MIN+SPAN. Ohne das wird es ein Kreis. */
 export const LOOP_JITTER_MIN = 0.85;

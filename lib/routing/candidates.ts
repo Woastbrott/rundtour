@@ -145,10 +145,9 @@ export async function* generateRoutes(
   signal?: AbortSignal,
 ): AsyncGenerator<GenerateEvent> {
   const { start, profile, terrain, target, nonce } = request;
-  // Beim Rennrad ist der Regler ausgeblendet; die Stufe wird trotzdem hart auf
-  // "ignore" gezogen, damit ein alter Client-Zustand nicht durchschlägt.
-  const networkPreference: NetworkPreference =
-    profile === "road" ? "ignore" : request.networkPreference;
+  // Der Netz-Regler gilt für beide Fahrprofile — auch fastbike kennt die
+  // Radnetz-Variablen, seit sie in profiles/fastbike-base.brf ergänzt sind.
+  const networkPreference: NetworkPreference = request.networkPreference;
 
   const engine: RoutingAdapter = routingEngine();
   const targetHmPerKm = TARGET_HM_PER_KM[terrain];

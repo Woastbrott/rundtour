@@ -85,7 +85,11 @@ in ROUTING.md.
 ## Grenzen, die bekannt sind
 
 - **„Nur Radnetz" ist eine Gewichtung, keine Sperre.** Führt kein beschilderter Weg zum
-  nächsten Wegpunkt, nimmt BRouter die Straße.
+  nächsten Wegpunkt, nimmt BRouter die Straße. Der Regler gilt für beide Fahrprofile;
+  beim Rennrad ist „Egal" voreingestellt, weil das Radnetz teils unbefestigt ist.
+- **Stichfahrten sind stark reduziert, nicht weg.** Doppelt befahrene Strecke liegt jetzt
+  bei rund 3–8 % statt 25 %. Restliche Umkehrpunkte entstehen dort, wo das Wegenetz keine
+  Alternative hergibt.
 - **Was in OSM fehlt, existiert fürs Routing nicht.** Ein aufgestelltes Schild ist keine
   Garantie für einen Eintrag im Radnetz.
 - **Höhenmeter treffen nie exakt.** Deshalb vier Stufen statt einer Zahl.
